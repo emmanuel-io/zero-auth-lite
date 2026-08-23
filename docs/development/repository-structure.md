@@ -57,7 +57,7 @@ authentication into canonical principal contexts.
 roles, permissions, and OAuth2 scopes. The package also owns the transactional
 `session_revocation` boundary that invalidates browser and OAuth2 sessions
 together. Feature-neutral constant-time
-comparison helpers remain under `app/core/security/`; `core` does not compose
+comparison helpers remain under `app/core/compare.py`; `core` does not compose
 feature implementations.
 
 Authorization has two deliberate layers. FastAPI dependencies enforce the
