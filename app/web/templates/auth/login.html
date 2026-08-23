@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Sign in · Zero Auth Lite{% endblock %}
+{% block content %}
+  <header>
+    <p class="eyebrow">Welcome back</p>
+    <h1 id="page-title">Sign in</h1>
+    <p class="muted">Use your Zero Auth Lite account to continue.</p>
+  </header>
+  {% if error %}<div class="alert" role="alert">{{ error }}</div>{% endif %}
+  {% if notice %}<div class="alert" role="status">Your request was completed.</div>{% endif %}
+  <form method="post" action="/login">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {% if transaction_id %}
+      <input type="hidden" name="transaction_id" value="{{ transaction_id }}">
+    {% endif %}
+    {% if device_code %}
+      <input type="hidden" name="device_code" value="{{ device_code }}">
+    {% endif %}
+    {% if return_url %}
+      <input type="hidden" name="return_url" value="{{ return_url }}">
+    {% endif %}
+    <label for="email">Email</label>
+    <input id="email" name="email" type="email" value="{{ email }}" autocomplete="username" required autofocus>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required>
+    <button type="submit">Sign in</button>
+  </form>
+  <p>{% if registration_enabled %}<a href="/register">Register</a> · {% endif %}<a href="/forgot-password">Forgot password?</a></p>
+{% endblock %}

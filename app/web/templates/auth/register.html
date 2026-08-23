@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Register · Zero Auth Lite{% endblock %}
+{% block content %}
+  <header><p class="eyebrow">Create an account</p><h1 id="page-title">Register</h1></header>
+  {% if error %}<div class="alert" role="alert">{{ error }}</div>{% endif %}
+  <form method="post" action="/register">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label for="organization_name">Organization name</label><input id="organization_name" name="organization_name" value="{{ organization_name }}" required>
+    <label for="first_name">First name</label><input id="first_name" name="first_name" value="{{ first_name }}">
+    <label for="last_name">Last name</label><input id="last_name" name="last_name" value="{{ last_name }}">
+    <label for="email">Email</label><input id="email" name="email" type="email" value="{{ email }}" autocomplete="email" required>
+    <label for="password">Password</label><input id="password" name="password" type="password" autocomplete="new-password" minlength="8" required>
+    <button type="submit">Register</button>
+  </form>
+{% endblock %}

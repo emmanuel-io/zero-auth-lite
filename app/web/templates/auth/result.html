@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · Zero Auth Lite{% endblock %}
+{% block content %}
+  <div class="status-mark" aria-hidden="true">✓</div>
+  <h1 id="page-title">{{ title }}</h1>
+  <p class="muted">{{ message }}</p>
+  {% if link_url %}<a class="button-link" href="{{ link_url }}">{{ link_label }}</a>{% endif %}
+{% endblock %}

@@ -1,0 +1,56 @@
+# -------------------------------
+# Python & Virtualenv
+# -------------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pkl
+*.db
+*.sqlite3
+.venv/
+venv/
+
+# -------------------------------
+# OS / Editor / IDE
+# -------------------------------
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# -------------------------------
+# Project Artifacts
+# -------------------------------
+.env
+.env.*
+zero-auth-lite.toml
+*.log
+*.tmp
+
+# -------------------------------
+# Node / Frontend (if present)
+# -------------------------------
+node_modules/
+build/
+dist/
+
+# -------------------------------
+# Git
+# -------------------------------
+.git/
+.gitignore
+.gitattributes
+
+# -------------------------------
+# Docker files
+# -------------------------------
+docker-compose.yml
+Dockerfile*
+
+# -------------------------------
+# Signing Keys
+# -------------------------------
+keys*

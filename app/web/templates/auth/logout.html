@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Sign out · Zero Auth Lite{% endblock %}
+{% block content %}
+  <header><p class="eyebrow">Session</p><h1 id="page-title">Sign out</h1><p class="muted">End this browser session.</p></header>
+  <form method="post" action="/logout">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit">Sign out</button>
+  </form>
+{% endblock %}

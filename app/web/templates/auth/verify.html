@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Verify email · Zero Auth Lite{% endblock %}
+{% block content %}
+  <header>
+    <p class="eyebrow">Account security</p>
+    <h1 id="page-title">Verify your email</h1>
+    <p class="muted">Confirm that this email address belongs to you.</p>
+  </header>
+  <form method="post" action="/verify-email">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="token" value="{{ token }}">
+    <button type="submit">Verify email</button>
+  </form>
+{% endblock %}

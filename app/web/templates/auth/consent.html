@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Authorize access · Zero Auth Lite{% endblock %}
+{% block content %}
+  <header>
+    <p class="eyebrow">Authorization request</p>
+    <h1 id="page-title">Allow {{ client_name }}?</h1>
+    <p class="muted">This application is requesting access to your account.</p>
+  </header>
+  <div class="scope-panel">
+    <h2>Requested access</h2>
+    {% if scopes %}
+      <ul>{% for scope in scopes %}<li><code>{{ scope }}</code></li>{% endfor %}</ul>
+    {% else %}
+      <p class="muted">No additional scopes requested.</p>
+    {% endif %}
+  </div>
+  <form class="actions" method="post" action="/oauth2/authorize/decision">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="transaction_id" value="{{ transaction_id }}">
+    <button class="secondary" type="submit" name="decision" value="deny">Deny</button>
+    <button type="submit" name="decision" value="approve">Allow</button>
+  </form>
+{% endblock %}

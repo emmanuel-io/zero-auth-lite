@@ -1,0 +1,133 @@
+[project]
+name = "zero-auth-lite"
+version = "0.1.0"
+description = "Readable single-node SQLite FastAPI identity server for sessions, OAuth2, and OIDC."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+authors = [{ name = "Emmanuel Amadio" }]
+dependencies = [
+    "alembic>=1.19.1",
+    "aiosqlite>=0.22.1",
+    "asgi-correlation-id>=4.3.4",
+    "cryptography>=46.0.7",
+    "email-validator>=2.3.0",
+    "fastapi>=0.141.1,<0.142.0",
+    "jinja2>=3.1.6",
+    "joserfc>=1.6.4",
+    "pwdlib[argon2]>=0.3.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.10.1",
+    "python-multipart>=0.0.20",
+    "sqlalchemy[asyncio]>=2.0.0",
+    "uvicorn>=0.35.0",
+]
+
+[project.optional-dependencies]
+gunicorn = [
+    "gunicorn>=23.0.0",
+    "uvicorn-worker>=0.4.0",
+]
+
+[dependency-groups]
+dev = [
+    "asgi-lifespan>=2.1.0",
+    "httpx>=0.28.1",
+    "mypy>=1.17.1",
+    "pytest>=8.4.1",
+    "pytest-asyncio>=1.1.0",
+    "pytest-cov>=7.0.0",
+    "pytest-timeout>=2.4.0",
+    "pytest-xdist>=3.8.0",
+    "ruff>=0.12.10",
+    "ty>=0.0.58",
+]
+
+docs = [
+    "mkdocstrings-python",
+    "zensical",
+]
+
+[project.urls]
+Homepage = "https://github.com/emmanuel-io/zero-auth-lite"
+Documentation = "https://emmanuel-io.github.io/zero-auth-lite/"
+Repository = "https://github.com/emmanuel-io/zero-auth-lite"
+Issues = "https://github.com/emmanuel-io/zero-auth-lite/issues"
+
+[tool.mypy]
+strict = true
+warn_unused_ignores = true
+warn_unreachable = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_any_generics = true
+no_implicit_optional = true
+check_untyped_defs = true
+follow_imports = "normal"
+plugins = ["pydantic.mypy"]
+
+[tool.pytest.ini_options]
+markers = [
+    "unit: isolated tests without external infrastructure",
+    "integration: tests using concrete persistence or infrastructure",
+    "api: tests through the fully wired ASGI HTTP interface",
+    "system: complete multi-request application workflows",
+    "negative: verifies that invalid, unauthorized, unsafe, unsupported, or inconsistent behavior is rejected",
+]
+addopts = [
+    "--timeout=60",
+    "--timeout-method=thread",
+    "--cov=app",
+    "--cov-branch",
+    "--cov-report=term-missing",
+    "--cov-report=html:reports/coverage/html",
+    "--cov-report=lcov:reports/coverage/coverage.lcov",
+    "--cov-report=xml:reports/coverage/coverage.xml",
+]
+pythonpath = ["."]
+testpaths = ["tests"]
+norecursedirs = ["__pycache__"]
+
+[tool.ruff]
+src = ["app", "tests", "docs/snippets", "scripts"]
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    # "E501",
+    "COM812",
+    "CPY001",
+    "ERA001",
+]
+fixable = ["ALL"]
+unfixable = ["B", "SIM", "TRY", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["D104", "E402", "F401", "F403", "F811"]
+"app/main.py" = ["D100", "INP001"]
+"app/settings/root.py" = ["S105"]
+"**/tests/**/test_*.py" = ["D202", "D205", "S101"]
+"tests/conftest.py" = ["FLY002", "S106"]
+"tests/support/auth.py" = ["S106"]
+"tests/**" = ["S101"]
+"scripts/**" = ["T201"]
+
+[tool.ruff.lint.isort]
+known-third-party = ["fastapi", "pydantic", "starlette"]
+combine-as-imports = true
+force-wrap-aliases = true
+lines-after-imports = 2
+order-by-type = false
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.mccabe]
+max-complexity = 12

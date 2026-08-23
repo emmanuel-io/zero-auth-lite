@@ -1,0 +1,15 @@
+{
+	local_certs
+}
+
+auth.zero-auth-lite.localhost {
+	reverse_proxy backend:8000
+}
+
+api.zero-auth-lite.localhost {
+	reverse_proxy backend:8000
+}
+
+mail.zero-auth-lite.localhost {
+	reverse_proxy mailpit:8025
+}

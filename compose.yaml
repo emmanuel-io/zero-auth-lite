@@ -1,0 +1,95 @@
+services:
+  migrate:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      ZA_DB_PATH: /data/zero-auth-lite.db
+    volumes:
+      - zero_auth_data:/data
+
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    environment:
+      ZA_DB_PATH: /data/zero-auth-lite.db
+      ZA_SNOWFLAKE_NODE_ID: "0"
+      ZA_MAIL__SMTP_HOST: mailpit
+      ZA_MAIL__SMTP_PORT: "1025"
+      # Trust only the Caddy container pinned on the local Compose network.
+      ZA_APP__TRUSTED_PROXY_IPS: '["172.30.0.10/32"]'
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ${ZA_CONFIG_FILE:-./config/full-server.example.toml}:/workspace/zero-auth-lite.toml:ro
+      - zero_auth_data:/data
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  outbox-worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: ["python", "-m", "app.events.worker"]
+    environment:
+      ZA_DB_PATH: /data/zero-auth-lite.db
+      ZA_SNOWFLAKE_NODE_ID: "1"
+      ZA_MAIL__SMTP_HOST: mailpit
+      ZA_MAIL__SMTP_PORT: "1025"
+    volumes:
+      - ${ZA_CONFIG_FILE:-./config/full-server.example.toml}:/workspace/zero-auth-lite.toml:ro
+      - zero_auth_data:/data
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      mailpit:
+        condition: service_started
+
+  oauth2-cleanup:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: ["python", "-m", "app.oauth2.cleanup_worker"]
+    environment:
+      ZA_DB_PATH: /data/zero-auth-lite.db
+    volumes:
+      - ${ZA_CONFIG_FILE:-./config/full-server.example.toml}:/workspace/zero-auth-lite.toml:ro
+      - zero_auth_data:/data
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  caddy:
+    image: caddy:2
+    networks:
+      default:
+        ipv4_address: 172.30.0.10
+    ports:
+      - "8443:443"
+    volumes:
+      - ./Caddyfile.local:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - backend
+      - mailpit
+
+  mailpit:
+    image: axllent/mailpit
+    ports:
+      - "8025:8025"
+      - "1025:1025"
+
+volumes:
+  caddy_config:
+  caddy_data:
+  zero_auth_data:
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24

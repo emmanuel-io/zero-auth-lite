@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Zero Auth Lite{% endblock %}
+{% block content %}
+  <header>
+    <p class="eyebrow">Identity server</p>
+    <h1 id="page-title">Zero Auth Lite</h1>
+    <p class="muted">Authentication, user management, OAuth2, and OpenID Connect in one readable server.</p>
+  </header>
+  <nav class="landing-links" aria-label="Primary">
+    {% if authenticated %}
+      <a class="button-link" href="/logout">Sign out</a>
+    {% elif sign_in_enabled %}
+      <a class="button-link" href="/login">Sign in</a>
+    {% endif %}
+    {% if application_url %}<a class="text-link" href="{{ application_url }}">Open application</a>{% endif %}
+    {% if show_api_docs %}<a class="text-link" href="/api/docs">API documentation</a>{% endif %}
+  </nav>
+{% endblock %}

@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>{% block title %}Zero Auth Lite{% endblock %}</title>
+    <link rel="stylesheet" href="/static/zero-auth-lite.css">
+  </head>
+  <body>
+    <main class="shell">
+      <section class="card" aria-labelledby="page-title">
+        <a class="brand" href="/" aria-label="Zero Auth Lite home">
+          <span class="brand-mark" aria-hidden="true">0</span>
+          <span>Zero Auth Lite</span>
+        </a>
+        {% block content %}{% endblock %}
+      </section>
+    </main>
+  </body>
+</html>

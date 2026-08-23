@@ -1,0 +1,4 @@
+interface:
+  display_name: "Zero Auth Lite SQLite"
+  short_description: "Keep SQLite persistence stable and explicit"
+  default_prompt: "Use $sqlite to review or change Zero Auth Lite database behavior safely."

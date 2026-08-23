@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Device verification · Zero Auth Lite{% endblock %}
+{% block content %}
+  <header>
+    <p class="eyebrow">Device authorization</p>
+    <h1 id="page-title">Verify a device</h1>
+    <p class="muted">Enter the code shown on your device, then approve or deny access.</p>
+  </header>
+  {% if error %}<div class="alert" role="alert">{{ error }}</div>{% endif %}
+  <form method="post" action="/oauth2/device/verify">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label for="user-code">User code</label>
+    <input id="user-code" name="user_code" value="{{ user_code }}" autocomplete="one-time-code" required autofocus>
+    <div class="actions">
+      <button class="secondary" type="submit" name="decision" value="deny">Deny</button>
+      <button type="submit" name="decision" value="approve">Approve</button>
+    </div>
+  </form>
+{% endblock %}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Zero Auth Lite Testing"
+  short_description: "Keep Zero Auth Lite tests readable and aligned"
+  default_prompt: "Use $testing to add or reorganize Zero Auth Lite tests consistently."

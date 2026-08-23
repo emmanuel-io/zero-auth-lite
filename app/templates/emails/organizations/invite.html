@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="en">
+  <body>
+    <h1>You have been invited</h1>
+    <p>Hello {{ name | default("there") }},</p>
+    <p>{{ inviter_name | default("An administrator") }} invited you to join {{ organization_name }} on Zero Auth.</p>
+    <p><a href="{{ invite_url }}">Accept invite</a></p>
+    <p>If you were not expecting this invitation, you can ignore this message.</p>
+  </body>
+</html>
