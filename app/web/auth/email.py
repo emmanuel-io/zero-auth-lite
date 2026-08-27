@@ -8,7 +8,7 @@ from starlette.responses import HTMLResponse, RedirectResponse
 
 from app.auth_tokens.dependencies import AuthTokenConfirmationServiceDep
 from app.browser_sessions.form_csrf import (
-    create_pre_session_form_csrf,
+    get_or_create_pre_session_form_csrf,
     set_pre_session_form_csrf_cookie,
     validate_pre_session_form_csrf,
 )
@@ -50,7 +50,7 @@ def _render_password_page(  # noqa: PLR0913
     status_code: int = status.HTTP_200_OK,
 ) -> HTMLResponse:
     """Render a password workflow with fresh CSRF state."""
-    csrf_token = create_pre_session_form_csrf()
+    csrf_token = get_or_create_pre_session_form_csrf(request, csrf_settings)
     response = render_page(
         request,
         "auth/password.html",
@@ -89,7 +89,7 @@ async def verification_page(
     token: Annotated[str, Query(min_length=16)],
 ) -> HTMLResponse:
     """Render the confirmation page linked from verification email."""
-    csrf_token = create_pre_session_form_csrf()
+    csrf_token = get_or_create_pre_session_form_csrf(request, csrf_settings)
     response = render_page(
         request,
         "auth/verify.html",

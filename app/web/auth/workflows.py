@@ -14,7 +14,7 @@ from app.browser_sessions.dependencies import (
     SessionRevocationServiceDep,
 )
 from app.browser_sessions.form_csrf import (
-    create_pre_session_form_csrf,
+    get_or_create_pre_session_form_csrf,
     set_pre_session_form_csrf_cookie,
     validate_pre_session_form_csrf,
 )
@@ -66,7 +66,7 @@ def _request_page(  # noqa: PLR0913
     error: str | None = None,
 ) -> HTMLResponse:
     """Render an anonymous email-request form with fresh CSRF state."""
-    csrf_token = create_pre_session_form_csrf()
+    csrf_token = get_or_create_pre_session_form_csrf(request, csrf_settings)
     response = render_page(
         request,
         "auth/request.html",
@@ -94,7 +94,7 @@ async def registration_page(
     error: Annotated[str | None, Query()] = None,
 ) -> HTMLResponse:
     """Render self-registration with anonymous CSRF state."""
-    csrf_token = create_pre_session_form_csrf()
+    csrf_token = get_or_create_pre_session_form_csrf(request, csrf_settings)
     response = render_page(
         request,
         "auth/register.html",

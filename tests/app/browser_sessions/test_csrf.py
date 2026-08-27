@@ -83,6 +83,21 @@ def test_validate_request_origin_accepts_public_and_trusted_origins() -> None:
     )
 
 
+def test_validate_request_origin_accepts_opaque_same_origin_form_navigation() -> None:
+    """Use unforgeable Fetch Metadata when Chrome serializes Origin as null."""
+    validate_request_origin(
+        request=make_request(
+            headers={
+                "origin": "null",
+                "sec-fetch-site": "same-origin",
+                "sec-fetch-mode": "navigate",
+                "sec-fetch-dest": "document",
+            }
+        ),
+        csrf_settings=CSRFSettings(),
+    )
+
+
 @pytest.mark.negative
 def test_validate_request_origin_rejects_missing_invalid_and_untrusted_values() -> None:
     """Assert origin validation rejects absent, unparsable, and untrusted origins."""
@@ -103,6 +118,19 @@ def test_validate_request_origin_rejects_missing_invalid_and_untrusted_values() 
     with pytest.raises(CSRFCookieHeaderMismatchError):
         validate_request_origin(
             request=make_request(headers={"origin": "https://evil.test"}),
+            csrf_settings=settings,
+        )
+
+    with pytest.raises(CSRFCookieHeaderMismatchError):
+        validate_request_origin(
+            request=make_request(
+                headers={
+                    "origin": "null",
+                    "sec-fetch-site": "cross-site",
+                    "sec-fetch-mode": "navigate",
+                    "sec-fetch-dest": "document",
+                }
+            ),
             csrf_settings=settings,
         )
 

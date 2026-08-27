@@ -48,6 +48,14 @@ class CSRFCookieHeaderMismatchError(AppError):
     status = status.HTTP_403_FORBIDDEN
 
 
+class CSRFFormOriginMismatchError(AppError):
+    """Handles a rejected Origin or Referer on a server-rendered form."""
+
+    code = "CSRF_FORM_ORIGIN_MISMATCH"
+    message = "CSRF form origin mismatch"
+    status = status.HTTP_403_FORBIDDEN
+
+
 class CSRFHeaderSessionMismatchError(AppError):
     """Handles csrf header session mismatch errors."""
 

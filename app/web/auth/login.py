@@ -12,7 +12,7 @@ from app.browser_sessions.dependencies import (
 )
 from app.browser_sessions.errors import InvalidLoginCredentialsError
 from app.browser_sessions.form_csrf import (
-    create_pre_session_form_csrf,
+    get_or_create_pre_session_form_csrf,
     set_pre_session_form_csrf_cookie,
     validate_pre_session_form_csrf,
 )
@@ -42,7 +42,7 @@ def _render_login(  # noqa: PLR0913
     status_code: int = status.HTTP_200_OK,
 ) -> HTMLResponse:
     """Render login with fresh anonymous CSRF state."""
-    csrf_token = create_pre_session_form_csrf()
+    csrf_token = get_or_create_pre_session_form_csrf(request, csrf_settings)
     response = render_page(
         request,
         "auth/login.html",

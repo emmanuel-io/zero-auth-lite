@@ -30,7 +30,7 @@ def _assert_secure_html_headers(response: httpx.Response) -> None:
     """Assert the shared security policy on one server-rendered page."""
     assert response.headers["Cache-Control"] == "no-store"
     assert response.headers["Pragma"] == "no-cache"
-    assert response.headers["Referrer-Policy"] == "no-referrer"
+    assert response.headers["Referrer-Policy"] == "same-origin"
     assert response.headers["X-Content-Type-Options"] == "nosniff"
     assert response.headers["Content-Security-Policy"] == CONTENT_SECURITY_POLICY
 

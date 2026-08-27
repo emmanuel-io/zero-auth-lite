@@ -28,6 +28,15 @@ def _origin_from_url(value: str) -> str | None:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
+def _is_same_origin_document_navigation(request: Request) -> bool:
+    """Recognize browser-authenticated same-origin navigation metadata."""
+    return (
+        request.headers.get("sec-fetch-site", "").casefold() == "same-origin"
+        and request.headers.get("sec-fetch-mode", "").casefold() == "navigate"
+        and request.headers.get("sec-fetch-dest", "").casefold() == "document"
+    )
+
+
 def expose_csrf_header(
     response: Response, csrf_token: str, csrf_settings: CSRFSettings
 ) -> None:
@@ -46,7 +55,11 @@ def validate_request_origin(request: Request, csrf_settings: CSRFSettings) -> No
     trusted_origins = {request_origin, *csrf_settings.trusted_origins}
     if csrf_settings.public_origin is not None:
         trusted_origins.add(csrf_settings.public_origin)
-    if _origin_from_url(raw_origin) not in trusted_origins:
+    origin_is_trusted = _origin_from_url(raw_origin) in trusted_origins
+    opaque_same_origin_navigation = (
+        raw_origin.casefold() == "null" and _is_same_origin_document_navigation(request)
+    )
+    if not origin_is_trusted and not opaque_same_origin_navigation:
         raise CSRFCookieHeaderMismatchError
 
 
