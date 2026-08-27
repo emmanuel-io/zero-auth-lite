@@ -127,7 +127,8 @@ Mailpit is available through Caddy at
 `https://auth.zero-auth-lite.localhost:8443`. Open Swagger UI at
 `https://auth.zero-auth-lite.localhost:8443/api/docs` or ReDoc at
 `https://auth.zero-auth-lite.localhost:8443/api/redocs`. Compose migrates the shared
-database volume before starting the backend. Mailpit remains directly
+database volume before starting the backend and also starts the notification
+outbox and OAuth2 persistence-cleanup workers. Mailpit remains directly
 reachable at `http://localhost:8025` for local tooling.
 
 ## Development
