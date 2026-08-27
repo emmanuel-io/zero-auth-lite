@@ -54,6 +54,20 @@ def _authorization_params() -> dict[str, str]:
 
 
 @pytest.mark.asyncio
+@app_settings(ui={"authentication": "builtin"})
+async def test_builtin_ui_serves_its_stylesheet(client: httpx.AsyncClient) -> None:
+    """Keep the stylesheet URL rendered by browser pages backed by a real asset."""
+    page = await client.get("/login")
+    stylesheet = await client.get("/static/zero-auth-lite.css")
+
+    assert page.status_code == status.HTTP_200_OK
+    assert 'href="/static/zero-auth-lite.css"' in page.text
+    assert stylesheet.status_code == status.HTTP_200_OK
+    assert stylesheet.headers["Content-Type"].startswith("text/css")
+    assert ".shell" in stylesheet.text
+
+
+@pytest.mark.asyncio
 @pytest.mark.system
 @app_settings(
     ui={"authentication": "builtin"},
