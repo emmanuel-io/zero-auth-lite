@@ -187,7 +187,7 @@ this value.
 
 The current identity and organization come from authenticated server state, never
 from a user-supplied organization identifier. Successful profile reads and updates
-embed the current organization's name in a `organization` object. The self-service response
+embed the current organization's name in an `organization` object. The self-service response
 does not expose user or organization identifiers, nor the server-operator flag;
 those fields belong to administrative representations rather than the user's
 own profile. The boolean `email_verified` states specifically whether the

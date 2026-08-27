@@ -16,7 +16,7 @@ deployment boundary and is not implemented by the server.
 
 Zero Auth Lite is functional but not yet stable.
 
-APIs, configuration, database schema, and internal interfaces may change 
+APIs, configuration, database schema, and internal interfaces may change
 between releases without backward compatibility.
 
 ## Documentation
