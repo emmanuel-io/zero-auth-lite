@@ -7,8 +7,8 @@ It is designed to make browser sessions, user lifecycle management, CSRF,
 OAuth2, OpenID Connect, and token lifecycles easier to understand and test.
 It is a small educational identity provider, not a turnkey identity platform.
 
-Zero Auth Lite targets single-node deployments for prototypes, internal
-applications, and small SaaS products. High-availability multi-node
+Zero Auth Lite targets prototypes, internal applications, and nominal-load
+deployments on one node. High-availability multi-node
 deployments are currently out of scope. Request rate limiting belongs at the
 deployment boundary and is not implemented by the server.
 

@@ -13,8 +13,8 @@ email delivery. It also rejects disabling both browser sessions and all OAuth2
 grants. These checks catch unsafe local defaults; the rest of this checklist
 still applies.
 
-It targets single-node deployments for prototypes, internal applications, and
-small SaaS products. This checklist hardens that deployment model; it does not
+It targets prototypes, internal applications, and nominal-load deployments on
+one node. This checklist hardens that deployment model; it does not
 turn Zero Auth Lite into a high-availability multi-node service.
 
 ## Deployment Topology
