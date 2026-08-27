@@ -89,6 +89,11 @@ uv run alembic upgrade head
 uv run uvicorn app.main:create_app --factory --reload
 ```
 
+Run these commands from the repository root so the server loads the copied
+`zero-auth-lite.toml` development profile. Open the UI through
+`http://localhost:8000` exactly; the profile intentionally uses non-secure,
+host-only cookies for that direct HTTP origin.
+
 In separate terminals from the same directory, run durable event delivery and
 OAuth2 persistence cleanup:
 

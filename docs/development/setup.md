@@ -57,6 +57,12 @@ uv run alembic upgrade head
 uv run uvicorn app.main:create_app --factory --reload
 ```
 
+Run both commands from the repository root so `zero-auth-lite.toml` is loaded,
+then use `http://localhost:8000` as the browser origin. If the server starts
+without this direct-run profile, the HTTPS cookie defaults prevent login over
+plain HTTP. The profile also trusts `http://127.0.0.1:8000` for direct debugging;
+do not switch hostnames between loading and submitting one form.
+
 Run durable notification delivery in another terminal so verification,
 invitation, and password-reset messages reach Mailpit:
 
