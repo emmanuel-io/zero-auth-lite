@@ -7,8 +7,8 @@ It is designed to make browser sessions, user lifecycle management, CSRF,
 OAuth2, OpenID Connect, and token lifecycles easier to understand and test.
 It is a small educational identity provider, not a turnkey identity platform.
 
-Zero Auth Lite targets single-node deployments for prototypes, internal
-applications, and small SaaS products. High-availability multi-node
+Zero Auth Lite targets prototypes, internal applications, and nominal-load
+deployments on one node. High-availability multi-node
 deployments are currently out of scope. Request rate limiting belongs at the
 deployment boundary and is not implemented by the server.
 
@@ -16,7 +16,7 @@ deployment boundary and is not implemented by the server.
 
 Zero Auth Lite is functional but not yet stable.
 
-APIs, configuration, database schema, and internal interfaces may change 
+APIs, configuration, database schema, and internal interfaces may change
 between releases without backward compatibility.
 
 ## Documentation
@@ -89,6 +89,11 @@ uv run alembic upgrade head
 uv run uvicorn app.main:create_app --factory --reload
 ```
 
+Run these commands from the repository root so the server loads the copied
+`zero-auth-lite.toml` development profile. Open the UI through
+`http://localhost:8000` exactly; the profile intentionally uses non-secure,
+host-only cookies for that direct HTTP origin.
+
 In separate terminals from the same directory, run durable event delivery and
 OAuth2 persistence cleanup:
 
@@ -122,7 +127,8 @@ Mailpit is available through Caddy at
 `https://auth.zero-auth-lite.localhost:8443`. Open Swagger UI at
 `https://auth.zero-auth-lite.localhost:8443/api/docs` or ReDoc at
 `https://auth.zero-auth-lite.localhost:8443/api/redocs`. Compose migrates the shared
-database volume before starting the backend. Mailpit remains directly
+database volume before starting the backend and also starts the notification
+outbox and OAuth2 persistence-cleanup workers. Mailpit remains directly
 reachable at `http://localhost:8025` for local tooling.
 
 ## Development

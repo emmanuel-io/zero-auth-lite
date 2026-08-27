@@ -15,6 +15,11 @@ uv run alembic upgrade head
 uv run uvicorn app.main:create_app --factory --reload
 ```
 
+Run these commands from the repository root and open
+`http://localhost:8000`. The copied profile supplies the host-only, non-secure
+cookies required by this direct HTTP development server; the application
+defaults retain HTTPS-only cookie settings.
+
 In another terminal from the same directory, start durable notification delivery:
 
 ```bash

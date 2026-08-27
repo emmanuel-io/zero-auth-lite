@@ -12,7 +12,7 @@ uv run python -m app.oauth2.cleanup_worker
 
 Database foreign keys protect the ownership boundaries independently of this
 worker. Deleting a user removes its browser sessions, OAuth2 sessions, token
-families, and pending authorization artifacts. Deleting an OAuth2 client or a
+families, and pending authorization artifacts. Deleting an OAuth2 client or an
 organization likewise removes the OAuth2 artifacts that refer to it. These cascades
 are an invalidation rule: no authorization code, device flow, session, or token
 remains usable after its owning security principal is deleted.

@@ -13,8 +13,8 @@ email delivery. It also rejects disabling both browser sessions and all OAuth2
 grants. These checks catch unsafe local defaults; the rest of this checklist
 still applies.
 
-It targets single-node deployments for prototypes, internal applications, and
-small SaaS products. This checklist hardens that deployment model; it does not
+It targets prototypes, internal applications, and nominal-load deployments on
+one node. This checklist hardens that deployment model; it does not
 turn Zero Auth Lite into a high-availability multi-node service.
 
 ## Deployment Topology
@@ -52,14 +52,19 @@ turn Zero Auth Lite into a high-availability multi-node service.
 - Choose `SameSite`, cookie domain, and trusted origins for the actual frontend
   topology.
 - Require CSRF checks on cookie-authenticated state changes.
+- When a browser serializes a form's `Origin` as `null`, accept it only for a
+  `same-origin` document navigation identified by Fetch Metadata headers; the
+  form token and cookie must still match.
 - Test login, logout, subdomain, and reverse-proxy behavior in a real browser.
 
 Built-in workflow links carry their single-use verification, invitation, or
 password-reset token in the URL until the browser submits the corresponding
-form. Every server-rendered page therefore sends `Referrer-Policy: no-referrer`
-so that the URL is not propagated through the `Referer` header. The same pages
-send a restrictive Content Security Policy that permits same-origin styles and
-forms while rejecting other content, framing, and document base overrides.
+form. Every server-rendered page therefore sends `Referrer-Policy: same-origin`:
+same-origin form submissions retain the origin signal required by CSRF checks,
+while workflow URLs are not propagated to another origin through the `Referer`
+header. The same pages send a restrictive Content Security Policy that permits
+same-origin styles and forms while rejecting other content, framing, and
+document base overrides.
 Preserve these headers at the reverse proxy and keep request URLs and headers
 containing workflow tokens out of access logs.
 

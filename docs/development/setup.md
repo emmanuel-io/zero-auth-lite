@@ -57,12 +57,29 @@ uv run alembic upgrade head
 uv run uvicorn app.main:create_app --factory --reload
 ```
 
+Run both commands from the repository root so `zero-auth-lite.toml` is loaded,
+then use `http://localhost:8000` as the browser origin. If the server starts
+without this direct-run profile, the HTTPS cookie defaults prevent login over
+plain HTTP. The profile also trusts `http://127.0.0.1:8000` for direct debugging;
+do not switch hostnames between loading and submitting one form.
+
 Run durable notification delivery in another terminal so verification,
 invitation, and password-reset messages reach Mailpit:
 
 ```bash
 uv run python -m app.events.worker
 ```
+
+Run OAuth2 persistence cleanup in a third terminal so expired protocol state
+is removed outside the FastAPI process:
+
+```bash
+uv run python -m app.oauth2.cleanup_worker
+```
+
+Run exactly one continuous cleanup worker for the development database. The
+[OAuth2 cleanup runbook](../operations/oauth2-cleanup.md) also documents
+one-shot execution for scheduled deployments.
 
 Open the built-in authentication UI at `http://localhost:8000/login` and
 Mailpit at `http://localhost:8025`. Stop the Mailpit container with
@@ -75,8 +92,12 @@ the canonical `auth.zero-auth-lite.localhost` origin, migrations, workers, and
 Mailpit together:
 
 ```bash
-ZA_CONFIG_FILE=zero-auth-lite.toml docker compose up --build
+docker compose up --build
 ```
+
+This command intentionally uses Compose's default HTTPS profile. Do not pass
+the direct HTTP `zero-auth-lite.toml` created above to Compose; its issuer,
+cookie, and CSRF settings describe a different browser origin.
 
 The two workflows serve different purposes: direct console processes are the
 recommended development loop, while Compose is the integration check for

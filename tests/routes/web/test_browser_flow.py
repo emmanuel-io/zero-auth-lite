@@ -35,7 +35,7 @@ def _assert_secure_html_headers(response: httpx.Response) -> None:
     """Assert the shared security policy on one server-rendered page."""
     assert response.headers["Cache-Control"] == "no-store"
     assert response.headers["Pragma"] == "no-cache"
-    assert response.headers["Referrer-Policy"] == "no-referrer"
+    assert response.headers["Referrer-Policy"] == "same-origin"
     assert response.headers["X-Content-Type-Options"] == "nosniff"
     assert response.headers["Content-Security-Policy"] == CONTENT_SECURITY_POLICY
 
@@ -51,6 +51,20 @@ def _authorization_params() -> dict[str, str]:
         "code_challenge": create_s256_code_challenge(code_verifier=CODE_VERIFIER),
         "code_challenge_method": "S256",
     }
+
+
+@pytest.mark.asyncio
+@app_settings(ui={"authentication": "builtin"})
+async def test_builtin_ui_serves_its_stylesheet(client: httpx.AsyncClient) -> None:
+    """Keep the stylesheet URL rendered by browser pages backed by a real asset."""
+    page = await client.get("/login")
+    stylesheet = await client.get("/static/zero-auth-lite.css")
+
+    assert page.status_code == status.HTTP_200_OK
+    assert 'href="/static/zero-auth-lite.css"' in page.text
+    assert stylesheet.status_code == status.HTTP_200_OK
+    assert stylesheet.headers["Content-Type"].startswith("text/css")
+    assert ".shell" in stylesheet.text
 
 
 @pytest.mark.asyncio
@@ -166,6 +180,57 @@ async def test_login_form_rejects_missing_csrf(
 
 
 @pytest.mark.asyncio
+@pytest.mark.negative
+@app_settings(ui={"authentication": "builtin"})
+async def test_login_form_reports_an_origin_mismatch_separately(
+    client: httpx.AsyncClient,
+    verified_user_credentials: UserCredentials,
+) -> None:
+    """Do not misreport a rejected browser origin as a cookie-value mismatch."""
+    page = await client.get("/login")
+    response = await client.post(
+        "/login",
+        data={
+            "email": verified_user_credentials.email,
+            "password": verified_user_credentials.password,
+            "csrf_token": _hidden_value(page, "csrf_token"),
+        },
+        headers={"Origin": "https://untrusted.example"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert response.json()["code"] == "CSRF_FORM_ORIGIN_MISMATCH"
+
+
+@pytest.mark.asyncio
+@app_settings(ui={"authentication": "builtin"})
+async def test_login_accepts_chrome_opaque_same_origin_navigation(
+    client: httpx.AsyncClient,
+    verified_user_credentials: UserCredentials,
+) -> None:
+    """Accept Chrome's opaque Origin only with same-origin navigation metadata."""
+    page = await client.get("/login")
+    response = await client.post(
+        "/login",
+        data={
+            "email": verified_user_credentials.email,
+            "password": verified_user_credentials.password,
+            "csrf_token": _hidden_value(page, "csrf_token"),
+        },
+        headers={
+            "Origin": "null",
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Dest": "document",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == status.HTTP_303_SEE_OTHER
+
+
+@pytest.mark.asyncio
 @app_settings(ui={"authentication": "builtin"})
 async def test_landing_and_standalone_login_use_root(
     client: httpx.AsyncClient,
@@ -201,6 +266,33 @@ async def test_landing_and_standalone_login_use_root(
         )
     assert 'href="/logout"' in authenticated_landing.text
     assert authenticated_login.status_code == status.HTTP_303_SEE_OTHER
+
+
+@pytest.mark.asyncio
+@app_settings(ui={"authentication": "builtin"})
+async def test_login_form_remains_valid_after_a_second_page_load(
+    client: httpx.AsyncClient,
+    verified_user_credentials: UserCredentials,
+) -> None:
+    """Keep concurrent anonymous forms bound to the same active CSRF cookie."""
+    first_page = await client.get("/login")
+    second_page = await client.get("/login")
+
+    assert _hidden_value(first_page, "csrf_token") == _hidden_value(
+        second_page, "csrf_token"
+    )
+    response = await client.post(
+        "/login",
+        data={
+            "email": verified_user_credentials.email,
+            "password": verified_user_credentials.password,
+            "csrf_token": _hidden_value(first_page, "csrf_token"),
+        },
+        headers={"Origin": TEST_ORIGIN},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == status.HTTP_303_SEE_OTHER
 
 
 @pytest.mark.asyncio

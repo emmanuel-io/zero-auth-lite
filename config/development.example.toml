@@ -29,7 +29,7 @@ log_level = "DEBUG"
 
 [cors]
 # enabled = true
-allowed_origins = ["http://localhost:8000"]
+allowed_origins = ["http://localhost:8000", "http://127.0.0.1:8000"]
 # allow_credentials = true
 # allow_methods = ["*"]
 # allow_headers = ["*"]
@@ -58,7 +58,7 @@ cookie_secure = false
 # origin_check_enabled = true
 # pattern = "synchronizer_token"
 public_origin = "http://localhost:8000"
-trusted_origins = ["http://localhost:8000"]
+trusted_origins = ["http://localhost:8000", "http://127.0.0.1:8000"]
 # ttl_seconds = 28800
 
 [oauth2]

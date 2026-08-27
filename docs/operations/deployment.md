@@ -6,9 +6,8 @@ for a complete identity platform.
 
 ## Deployment Model
 
-Zero Auth Lite targets one application node. It is intended for prototypes,
-internal applications, and small SaaS products whose authentication service
-does not require high-availability multi-node operation.
+Zero Auth Lite targets prototypes, internal applications, and nominal-load
+deployments on a single node that do not require high availability.
 
 The node owns application composition and runs outbox delivery and OAuth2
 cleanup as explicit side processes. SQLAlchemy stores all durable identity,
