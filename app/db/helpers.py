@@ -15,7 +15,7 @@ from .errors import (
 if TYPE_CHECKING:
     from sqlalchemy.exc import IntegrityError
 
-    from app.errors import DataConflictError
+    from app.core.errors.common import DataConflictError
 
 logger = getLogger(__name__)
 
@@ -31,12 +31,12 @@ def map_integrity_error(e: "IntegrityError") -> "DataConflictError":
     logger.warning("Integrity error caught", extra={"original_error": msg})
 
     if "unique constraint failed" in lowered:
-        return UniqueViolationError(msg)
+        return UniqueViolationError()
     if "foreign key constraint failed" in lowered:
-        return ForeignKeyViolationError(msg)
+        return ForeignKeyViolationError()
     if "not null constraint failed" in lowered:
-        return NotNullViolationError(msg)
+        return NotNullViolationError()
     if "check constraint failed" in lowered:
-        return CheckViolationError(msg)
+        return CheckViolationError()
 
-    return ConstraintViolationError(msg)
+    return ConstraintViolationError()

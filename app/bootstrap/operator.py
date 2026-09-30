@@ -11,9 +11,8 @@ from app.bootstrap.settings import BootstrapSettings
 from app.db.models.organization import OrganizationDB
 from app.db.models.organization_membership import OrganizationMembershipDB
 from app.db.models.user import UserDB
-from app.identity.public_ids import format_organization_id
 from app.identity.users.emails import create_user_email
-from app.identity.users.enums import OrganizationUserRole, UserEmailStatus
+from app.identity.users.enums import OrganizationMembershipRole, UserEmailStatus
 from app.password.async_hashing import hash_password
 from app.password.protocols import PasswordHasherProtocol
 from app.password.validation import validate_password
@@ -70,6 +69,7 @@ async def bootstrap_operator_user(
                 hashed_password=password_hash,
                 is_active=True,
                 is_operator=True,
+                invitation_pending=False,
             )
             .returning(UserDB)
         )
@@ -78,7 +78,7 @@ async def bootstrap_operator_user(
         insert(OrganizationMembershipDB).values(
             user_id=user.id,
             organization_id=organization.id,
-            role=OrganizationUserRole.ADMIN,
+            role=OrganizationMembershipRole.ADMIN,
         )
     )
     user_email = await create_user_email(
@@ -94,7 +94,7 @@ async def bootstrap_operator_user(
         "event=bootstrap_operator_created outcome=success "
         "reason=first_user_bootstrap organization_id=%s "
         "action=remove_bootstrap_credentials",
-        format_organization_id(organization.public_id),
+        str(organization.public_id),
     )
 
 

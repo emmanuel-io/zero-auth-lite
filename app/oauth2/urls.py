@@ -32,18 +32,3 @@ def public_route_url(request: Request, *, issuer: str, route_name: str) -> str:
             "",
         )
     )
-
-
-def public_path_url(*, issuer: str, path: str) -> str:
-    """Return a fixed public path on the configured issuer origin."""
-    configured_issuer = urlsplit(issuer)
-    issuer_path = configured_issuer.path.rstrip("/")
-    return urlunsplit(
-        (
-            configured_issuer.scheme,
-            configured_issuer.netloc,
-            f"{issuer_path}/{path.lstrip('/')}",
-            "",
-            "",
-        )
-    )

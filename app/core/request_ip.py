@@ -1,22 +1,21 @@
 """Source IP extraction for security-relevant session metadata."""
 
-from ipaddress import ip_address, ip_network
-from logging import getLogger
+from ipaddress import ip_address
 
 from fastapi import Request
+from pydantic import IPvAnyNetwork
 
 from app.settings.state import get_settings_snapshot
 
 
-logger = getLogger(__name__)
-
-
-def _configured_trusted_proxies(request: Request) -> list[str]:
+def _configured_trusted_proxies(request: Request) -> tuple[IPvAnyNetwork, ...]:
     """Return trusted proxy CIDRs configured on application settings."""
-    return list(get_settings_snapshot(request.app).app.trusted_proxy_ips)
+    return get_settings_snapshot(request.app).app.trusted_proxy_ips
 
 
-def _is_trusted_proxy(*, peer: str, trusted_proxy_ips: list[str]) -> bool:
+def _is_trusted_proxy(
+    *, peer: str, trusted_proxy_ips: tuple[IPvAnyNetwork, ...]
+) -> bool:
     """Return whether a peer IP is trusted to supply forwarded headers."""
     if not trusted_proxy_ips:
         return False
@@ -24,16 +23,12 @@ def _is_trusted_proxy(*, peer: str, trusted_proxy_ips: list[str]) -> bool:
         peer_ip = ip_address(peer)
     except ValueError:
         return False
-    for item in trusted_proxy_ips:
-        try:
-            if peer_ip in ip_network(item, strict=False):
-                return True
-        except ValueError:
-            logger.warning("Ignoring invalid trusted proxy entry: %s", item)
-    return False
+    return any(peer_ip in network for network in trusted_proxy_ips)
 
 
-def _is_trusted_forwarded_hop(*, hop: str, trusted_proxy_ips: list[str]) -> bool:
+def _is_trusted_forwarded_hop(
+    *, hop: str, trusted_proxy_ips: tuple[IPvAnyNetwork, ...]
+) -> bool:
     """Return whether a forwarded-hop IP is configured as trusted."""
     return _is_trusted_proxy(peer=hop, trusted_proxy_ips=trusted_proxy_ips)
 
@@ -84,7 +79,7 @@ def _client_from_forwarded_chain(
     *,
     forwarded_hops: list[str],
     direct_peer: str,
-    trusted_proxy_ips: list[str],
+    trusted_proxy_ips: tuple[IPvAnyNetwork, ...],
 ) -> str | None:
     """Return the first untrusted client IP from a forwarded chain."""
     if not forwarded_hops:

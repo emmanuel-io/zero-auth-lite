@@ -21,9 +21,14 @@ under the device-flow tag, but they are built-in HTML adapters rather than
 OAuth2 protocol endpoints. Device authorization and token polling remain the
 protocol endpoints.
 
-The current server does not accept an external verification URL. Enabling the
-device-code grant while disabling the built-in UI is therefore rejected during
-settings validation, before a client can receive an unusable verification URI.
+With external OAuth2 interaction enabled, the Device Authorization response uses
+the configured frontend URL as `verification_uri`. The authenticated frontend
+reads the pending interaction and records the user's decision through the
+versioned Device interaction API. The
+[external authentication UI guide](external-authentication-ui.md#device-code-interaction)
+documents that JSON exchange. Settings validation requires either the built-in
+or external interaction mode so a client cannot receive an unusable verification
+URI.
 
 The decision is organization-bound and one-time. Invalid, expired, or already
 completed codes return a `400` HTML response; another user cannot overwrite a

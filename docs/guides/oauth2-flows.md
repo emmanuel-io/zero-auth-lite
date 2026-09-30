@@ -82,10 +82,12 @@ tokens.
 3. The server issues an access token whose subject is the client.
 
 There is no browser user, consent screen, ID token, refresh token, or user
-impersonation in this grant. The resulting machine principal carries OAuth2
-scopes and its configured organization-access policy, but no user roles or implicit
-user permissions. Application routes must therefore authorize machine access
-explicitly instead of inheriting the baseline organization-user permission set.
+impersonation in this grant. The resulting machine principal carries the
+client identity and OAuth2 scopes, but no user roles, implicit user permissions,
+or copy of its organization-access policy. That policy remains server-side and
+is reloaded for every relevant authorization decision. Application routes must
+therefore authorize machine access explicitly instead of inheriting the
+baseline organization-user permission set.
 
 Client credentials and the other non-browser protocol endpoints can run with
 the browser-session feature disabled. OAuth2 still uses its own session table
@@ -128,7 +130,7 @@ token, OAuth2 session, client, identity, organization, and expiry state. Signatu
 validity alone does not prove that a token remains active.
 
 The OAuth2 session owns the immutable authorization metadata: client, original
-grant, granted scope, and optional user and organization. The SQL token pair
+grant, granted scope, and optional user and organization. The SQL token state
 contains only the current access and refresh material and is the expiry
 authority for its family. The refresh
 deadline is fixed when the family is issued, and every rotation preserves that
@@ -141,8 +143,9 @@ current pair together as one token family.
 ## Client Policy Changes
 
 An operator may replace a client's scopes, grants, active status, and organization
-access policy. A change that removes an existing capability atomically ends
-every OAuth2 session issued to that client and deletes its current token pairs.
+access policy. User and machine organization modes are replaced atomically with
+their assignment sets on their dedicated endpoints. A change that removes an existing capability atomically ends
+every OAuth2 session issued to that client and deletes its current token states.
 This includes removing a scope or grant, disabling the client, making a
 user-organization access mode more restrictive, or removing an assigned user or
 machine organization. Previously issued access and refresh tokens therefore stop
@@ -155,10 +158,14 @@ The fresh row is the authority for its secret, active state, grants, scopes,
 and organization policy, so a concurrent reduction cannot issue a token from
 stale client state.
 
-Adding a scope, grant, or organization does not revoke existing sessions. Existing
-tokens do not gain that new authority: a new authorization or token issuance is
-still required. Redirect URI, display-name, and consent-policy changes do not
-alter already issued token authority and do not trigger revocation.
+Adding a scope or grant does not revoke existing sessions. Their tokens retain the
+scopes recorded when the session was created, so a new authorization or token
+issuance is required to use the added capability. Machine-organization assignments
+are different: authorization reloads the current assignment policy on every
+request. An existing client-credentials token that already carries the required
+scope can therefore use a newly assigned organization immediately. Redirect URI,
+display-name, and consent-policy changes do not alter already issued token
+authority and do not trigger revocation.
 
 ## Code Map
 
@@ -166,10 +173,15 @@ Flow code is grouped by protocol concept:
 
 - `app/oauth2/authorization/`: authorization requests, consent transactions,
   PKCE, and code exchange;
-- `app/oauth2/tokens/refresh.py`: rotation, revocation, and reuse response;
+- `app/oauth2/tokens/router.py`: typed token, revocation, and introspection HTTP
+  endpoints;
+- `app/oauth2/tokens/refresh.py`: refresh-token rotation and reuse response;
+- `app/oauth2/tokens/revocation.py`: access- and refresh-token revocation;
 - `app/oauth2/clients/client_credentials.py`: machine access tokens;
 - `app/oauth2/devices/`: device codes, browser approval, and polling;
 - `app/oauth2/tokens/introspection.py`: active-token checks;
+- `app/oauth2/signing/`: signing-key loading and the JWKS route;
+- `app/oauth2/metadata.py`: OAuth2 authorization-server metadata;
 - `app/oauth2/principal.py`: bearer principal resolution shared by OAuth2-protected application routes and OIDC UserInfo.
 
 See [OpenID Connect](openid-connect.md) for the identity layer added by the `openid`

@@ -34,8 +34,8 @@ async def test_csrf_exposes_header_without_reissuing_the_session_cookie(
 ) -> None:
     """Fetch CSRF state without reissuing an unchanged session cookie."""
     login_response = await login(client, verified_user_credentials)
-    csrf_header_name = app.state.settings.session.csrf.header_name
-    session_cookie_name = app.state.settings.session.cookie_name
+    csrf_header_name = app.state.settings.browser_session.csrf.header_name
+    session_cookie_name = app.state.settings.browser_session.cookie_name
 
     response = await client.get("/api/v1/sessions/csrf")
 
@@ -48,7 +48,7 @@ async def test_csrf_exposes_header_without_reissuing_the_session_cookie(
 
 @pytest.mark.asyncio
 @app_settings(
-    session={
+    browser_session={
         "absolute_ttl_seconds": 240,
         "slide_seconds": 120,
         "ttl_seconds": 120,
@@ -62,7 +62,7 @@ async def test_csrf_cookie_refresh_uses_the_persisted_session_lifetime(
 ) -> None:
     """Assert refreshed CSRF cookies cannot outlive persisted sessions."""
     await login(client, verified_user_credentials)
-    csrf_settings = app.state.settings.session.csrf
+    csrf_settings = app.state.settings.browser_session.csrf
 
     response = await client.get("/api/v1/sessions/csrf")
 
@@ -75,7 +75,7 @@ async def test_csrf_cookie_refresh_uses_the_persisted_session_lifetime(
     assert response.status_code == status.HTTP_204_NO_CONTENT
     assert csrf_settings.header_name not in response.headers
     assert "HttpOnly" not in csrf_cookie_header
-    assert 0 < max_age <= app.state.settings.session.ttl_seconds
+    assert 0 < max_age <= app.state.settings.browser_session.ttl_seconds
 
 
 @pytest.mark.asyncio
@@ -87,14 +87,14 @@ async def test_csrf_issues_stateless_pre_session_state(
     """Assert anonymous callers receive CSRF state without a session."""
     response = await client.get("/api/v1/sessions/csrf")
 
-    csrf_settings = app.state.settings.session.csrf
+    csrf_settings = app.state.settings.browser_session.csrf
     assert response.status_code == status.HTTP_204_NO_CONTENT
     assert response.headers["Cache-Control"] == "no-store"
     assert (
         response.cookies[csrf_settings.cookie_name]
         == response.headers[csrf_settings.header_name]
     )
-    assert app.state.settings.session.cookie_name not in response.cookies
+    assert app.state.settings.browser_session.cookie_name not in response.cookies
 
 
 @pytest.mark.asyncio
@@ -110,7 +110,7 @@ async def test_csrf_ignores_a_bearer_token_and_issues_pre_session_state(
             headers={"Authorization": "Bearer irrelevant-for-this-endpoint"},
         )
 
-    csrf_settings = app.state.settings.session.csrf
+    csrf_settings = app.state.settings.browser_session.csrf
     assert response.status_code == status.HTTP_204_NO_CONTENT
     assert (
         response.cookies[csrf_settings.cookie_name]
@@ -124,7 +124,7 @@ async def test_csrf_recovers_from_an_invalid_session_cookie(
     client: httpx.AsyncClient,
 ) -> None:
     """Assert stale browser sessions fall back to fresh pre-session CSRF state."""
-    session_settings = app.state.settings.session
+    session_settings = app.state.settings.browser_session
     client.cookies.set(session_settings.cookie_name, "invalid-session")
 
     response = await client.get("/api/v1/sessions/csrf")
@@ -163,7 +163,7 @@ async def test_csrf_replaces_a_session_for_an_inactive_user(
 
     response = await client.get("/api/v1/sessions/csrf")
 
-    settings = app.state.settings.session
+    settings = app.state.settings.browser_session
     set_cookie_headers = response.headers.get_list("set-cookie")
     assert response.status_code == status.HTTP_204_NO_CONTENT
     assert any(

@@ -5,24 +5,23 @@ from typing import Any
 
 from app.identity.organizations.dtos import OrganizationReadDTO
 from app.identity.users.criteria import (
-    OperatorUserSearchCriteriaDTO,
     OrganizationUserSearchCriteriaDTO,
+    ServerUserSearchCriteriaDTO,
     UserPageDTO,
 )
 from app.identity.users.dtos import (
-    OperatorUserCreateDTO,
-    OperatorUserPatchDTO,
-    OperatorUserReplaceDTO,
     OrganizationUserCreateDTO,
     OrganizationUserPatchDTO,
     OrganizationUserReadDTO,
     OrganizationUserReplaceDTO,
+    ServerUserCreateDTO,
+    ServerUserPatchDTO,
+    ServerUserReplaceDTO,
     UserPasswordChangeDTO,
     UserReadDTO,
     UserSelfPatchDTO,
     UserSelfReadDTO,
 )
-from app.public_ids import PublicId
 
 from tests.fixtures.api import (
     organization_user_read,
@@ -30,6 +29,7 @@ from tests.fixtures.api import (
     user_read,
     user_self_read,
 )
+from tests.identifiers import PublicId
 
 
 class FakeUserSelfService:
@@ -93,7 +93,7 @@ class FakeOrganizationUsersService:
     async def get(self, *, user_id: PublicId) -> OrganizationUserReadDTO:
         """Return one organization user."""
         self.target = user_id
-        return organization_user_read(public_id=int(user_id))
+        return organization_user_read(public_id=user_id)
 
     async def create(
         self, *, dto: OrganizationUserCreateDTO
@@ -124,7 +124,7 @@ class FakeOrganizationUsersService:
         self.target = user_id
 
 
-class FakeOperatorOrganizationsService:
+class FakeServerOrganizationsService:
     """Fake server-operator organization administration."""
 
     def __init__(self) -> None:
@@ -157,27 +157,27 @@ class FakeOperatorOrganizationsService:
     async def get(self, *, organization_id: PublicId) -> OrganizationReadDTO:
         """Return a globally fetched organization."""
         self.organization_id = organization_id
-        return OrganizationReadDTO(public_id=int(organization_id), name="Organization")
+        return OrganizationReadDTO(public_id=organization_id, name="Organization")
 
     async def update(
         self, *, organization_id: PublicId, dto: Any
     ) -> OrganizationReadDTO:
         """Return a globally patched organization."""
         self.organization_id = organization_id
-        return OrganizationReadDTO(public_id=int(organization_id), name=dto.name)
+        return OrganizationReadDTO(public_id=organization_id, name=dto.name)
 
 
-class FakeOperatorUsersService:
+class FakeServerUsersService:
     """Fake server-operator user administration."""
 
     def __init__(self) -> None:
         """Initialize recorded operator user operations."""
-        self.criteria: OperatorUserSearchCriteriaDTO | None = None
+        self.criteria: ServerUserSearchCriteriaDTO | None = None
         self.target: PublicId | None = None
         self.organization_id: PublicId | None = None
 
     async def search(
-        self, *, criteria: OperatorUserSearchCriteriaDTO
+        self, *, criteria: ServerUserSearchCriteriaDTO
     ) -> UserPageDTO[UserReadDTO]:
         """Return one global user and record criteria."""
         self.criteria = criteria
@@ -186,9 +186,9 @@ class FakeOperatorUsersService:
     async def get(self, *, user_id: PublicId) -> UserReadDTO:
         """Return one global user."""
         self.target = user_id
-        return user_read(public_id=int(user_id))
+        return user_read(public_id=user_id)
 
-    async def create(self, *, dto: OperatorUserCreateDTO) -> UserReadDTO:
+    async def create(self, *, dto: ServerUserCreateDTO) -> UserReadDTO:
         """Return a globally created user."""
         self.organization_id = dto.organization_id
         return user_read(email=str(dto.email))
@@ -201,7 +201,7 @@ class FakeOperatorUsersService:
         self,
         *,
         user_id: PublicId,
-        dto: OperatorUserPatchDTO,
+        dto: ServerUserPatchDTO,
     ) -> UserReadDTO:
         """Return a globally patched user."""
         self.target = user_id
@@ -212,7 +212,7 @@ class FakeOperatorUsersService:
         self,
         *,
         user_id: PublicId,
-        dto: OperatorUserReplaceDTO,
+        dto: ServerUserReplaceDTO,
     ) -> UserReadDTO:
         """Return a globally replaced user."""
         self.target = user_id

@@ -5,8 +5,10 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
+from app.identity.users.specs import UserSpecs
 from app.oauth2.authorization.code import create_s256_code_challenge
-from fastapi import FastAPI, status
+from app.web.routes import BrowserPageRoute, ManagementPageRoute
+from fastapi import APIRouter, FastAPI, HTTPException, status
 
 from tests.fixtures.auth import UserCredentials
 from tests.fixtures.oauth2 import (
@@ -14,13 +16,14 @@ from tests.fixtures.oauth2 import (
     create_public_authorization_code_client,
 )
 from tests.fixtures.settings import app_settings
+from tests.identifiers import deterministic_uuid
 
 
 pytestmark = pytest.mark.api
 TEST_ORIGIN = "http://testserver"
 CONTENT_SECURITY_POLICY = (
-    "default-src 'none'; style-src 'self'; form-action 'self'; "
-    "frame-ancestors 'none'; base-uri 'none'"
+    "default-src 'none'; style-src 'self'; script-src 'self'; form-action 'self'; "
+    "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'"
 )
 
 
@@ -44,7 +47,7 @@ def _authorization_params() -> dict[str, str]:
     """Return one valid Authorization Code with PKCE request."""
     return {
         "response_type": "code",
-        "client_id": "public-client",
+        "client_id": str(deterministic_uuid("public-client")),
         "redirect_uri": "https://client.example/callback",
         "scope": "read",
         "state": "browser-state",
@@ -54,7 +57,45 @@ def _authorization_params() -> dict[str, str]:
 
 
 @pytest.mark.asyncio
-@app_settings(ui={"authentication": "builtin"})
+@pytest.mark.negative
+@app_settings(ui={"management_authentication": "builtin"})
+async def test_resolved_browser_routes_keep_framework_and_internal_errors_html(
+    app: FastAPI,
+) -> None:
+    """Use the route marker for safe full-page and HTMX error responses."""
+    browser_router = APIRouter(route_class=BrowserPageRoute)
+    management_router = APIRouter(route_class=ManagementPageRoute)
+
+    @browser_router.get("/_test/browser-http-error")
+    async def browser_http_error() -> None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Conflict")
+
+    @management_router.get("/_test/management-internal-error")
+    async def management_internal_error() -> None:
+        error_message = "sensitive internal detail"
+        raise RuntimeError(error_message)
+
+    app.include_router(browser_router)
+    app.include_router(management_router)
+    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+    async with httpx.AsyncClient(transport=transport, base_url=TEST_ORIGIN) as client:
+        framework_error = await client.get("/_test/browser-http-error")
+        internal_fragment = await client.get(
+            "/_test/management-internal-error", headers={"HX-Request": "true"}
+        )
+
+    assert framework_error.status_code == status.HTTP_409_CONFLICT
+    assert framework_error.headers["content-type"].startswith("text/html")
+    assert "Conflict" in framework_error.text
+    assert internal_fragment.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    assert internal_fragment.headers["content-type"].startswith("text/html")
+    assert "Internal server error" in internal_fragment.text
+    assert "sensitive internal detail" not in internal_fragment.text
+    assert "<!doctype html>" not in internal_fragment.text
+
+
+@pytest.mark.asyncio
+@app_settings(ui={"management_authentication": "builtin"})
 async def test_builtin_ui_serves_its_stylesheet(client: httpx.AsyncClient) -> None:
     """Keep the stylesheet URL rendered by browser pages backed by a real asset."""
     page = await client.get("/login")
@@ -62,15 +103,102 @@ async def test_builtin_ui_serves_its_stylesheet(client: httpx.AsyncClient) -> No
 
     assert page.status_code == status.HTTP_200_OK
     assert 'href="/static/zero-auth-lite.css"' in page.text
+    assert "/static/vendor/htmx-4.0.0-beta6.min.js" not in page.text
     assert stylesheet.status_code == status.HTTP_200_OK
     assert stylesheet.headers["Content-Type"].startswith("text/css")
-    assert ".shell" in stylesheet.text
+    assert "--content-width" in stylesheet.text
+    assert ".auth-shell" in stylesheet.text
+    assert ".app-menu" in stylesheet.text
+    assert (
+        ".app-menu:not([open]) > .app-nav--mobile { display: none; }" in stylesheet.text
+    )
 
 
 @pytest.mark.asyncio
 @pytest.mark.system
 @app_settings(
-    ui={"authentication": "builtin"},
+    ui={
+        "identity_workflow_mode": "builtin",
+        "management_authentication": "external",
+        "oauth2_interaction": "disabled",
+        "urls": {
+            "login": "https://frontend.example/login",
+            "logout": "https://frontend.example/logout",
+        },
+    },
+    oauth2={"device_code_enabled": False},
+)
+async def test_builtin_workflow_uses_external_authentication_destination(
+    client: httpx.AsyncClient,
+) -> None:
+    """Keep built-in identity forms usable without mounting the built-in login."""
+    landing = await client.get("/")
+    register_page = await client.get("/register")
+    registration = await client.post(
+        "/register",
+        data={
+            "email": "external-completion@example.com",
+            "password": "Ext3rnalFlow!",
+            "organization_name": "External Completion",
+            "csrf_token": _hidden_value(register_page, "csrf_token"),
+        },
+        headers={"Origin": TEST_ORIGIN},
+        follow_redirects=False,
+    )
+
+    assert landing.status_code == status.HTTP_200_OK
+    assert 'href="https://frontend.example/login"' in landing.text
+    assert (await client.get("/login")).status_code == status.HTTP_404_NOT_FOUND
+    assert registration.status_code == status.HTTP_303_SEE_OTHER
+    assert registration.headers["location"] == (
+        "https://frontend.example/login?notice=registered"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.system
+@app_settings(ui={"management_authentication": "builtin"})
+async def test_device_verification_login_preserves_only_the_user_code(
+    client: httpx.AsyncClient,
+    verified_user_credentials: UserCredentials,
+) -> None:
+    """Carry the public user code through login without naming it device code."""
+    bare_start = await client.get("/oauth2/device/verify", follow_redirects=False)
+    assert bare_start.headers["location"] == "/login"
+
+    start = await client.get(
+        "/oauth2/device/verify",
+        params={"user_code": "ABCD-EFGH"},
+        follow_redirects=False,
+    )
+    assert start.headers["location"] == "/login?user_code=ABCD-EFGH"
+
+    login_page = await client.get(start.headers["location"])
+    assert _hidden_value(login_page, "user_code") == "ABCD-EFGH"
+    assert 'name="device_code"' not in login_page.text
+
+    response = await client.post(
+        "/login",
+        data={
+            "email": verified_user_credentials.email,
+            "password": verified_user_credentials.password,
+            "csrf_token": _hidden_value(login_page, "csrf_token"),
+            "user_code": "ABCD-EFGH",
+        },
+        headers={"Origin": TEST_ORIGIN},
+        follow_redirects=False,
+    )
+
+    assert response.headers["location"] == (
+        "https://auth.zero-auth-lite.localhost:8443/oauth2/device/verify"
+        "?user_code=ABCD-EFGH"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.system
+@app_settings(
+    ui={"management_authentication": "builtin"},
     default_redirect_url="https://application.example/dashboard?source=auth#complete",
 )
 async def test_browser_authorization_login_consent_and_callback(
@@ -161,7 +289,7 @@ async def test_browser_authorization_login_consent_and_callback(
 
 @pytest.mark.asyncio
 @pytest.mark.negative
-@app_settings(ui={"authentication": "builtin"})
+@app_settings(ui={"management_authentication": "builtin"})
 async def test_login_form_rejects_missing_csrf(
     client: httpx.AsyncClient,
     verified_user_credentials: UserCredentials,
@@ -181,7 +309,7 @@ async def test_login_form_rejects_missing_csrf(
 
 @pytest.mark.asyncio
 @pytest.mark.negative
-@app_settings(ui={"authentication": "builtin"})
+@app_settings(ui={"management_authentication": "builtin"})
 async def test_login_form_reports_an_origin_mismatch_separately(
     client: httpx.AsyncClient,
     verified_user_credentials: UserCredentials,
@@ -200,11 +328,56 @@ async def test_login_form_reports_an_origin_mismatch_separately(
     )
 
     assert response.status_code == status.HTTP_403_FORBIDDEN
-    assert response.json()["code"] == "CSRF_FORM_ORIGIN_MISMATCH"
+    assert response.headers["content-type"].startswith("text/html")
+    assert "CSRF form origin mismatch" in response.text
 
 
 @pytest.mark.asyncio
-@app_settings(ui={"authentication": "builtin"})
+@pytest.mark.negative
+@app_settings(ui={"management_authentication": "builtin"})
+async def test_login_validation_failure_is_rendered_as_html(
+    client: httpx.AsyncClient,
+) -> None:
+    """Keep FastAPI form validation inside the browser presentation contract."""
+    page = await client.get("/login")
+    response = await client.post(
+        "/login",
+        data={
+            "password": "irrelevant",
+            "csrf_token": _hidden_value(page, "csrf_token"),
+        },
+        headers={"Origin": TEST_ORIGIN},
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.headers["content-type"].startswith("text/html")
+    assert "Check the submitted values" in response.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.negative
+@app_settings(ui={"management_authentication": "builtin"})
+async def test_login_form_rejects_an_oversized_email(
+    client: httpx.AsyncClient,
+) -> None:
+    """Apply the canonical email bound at the browser transport boundary."""
+    page = await client.get("/login")
+    response = await client.post(
+        "/login",
+        data={
+            "email": "x" * (UserSpecs.EMAIL_LENGTH_MAX + 1),
+            "password": "irrelevant",
+            "csrf_token": _hidden_value(page, "csrf_token"),
+        },
+        headers={"Origin": TEST_ORIGIN},
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.headers["content-type"].startswith("text/html")
+
+
+@pytest.mark.asyncio
+@app_settings(ui={"management_authentication": "builtin"})
 async def test_login_accepts_chrome_opaque_same_origin_navigation(
     client: httpx.AsyncClient,
     verified_user_credentials: UserCredentials,
@@ -231,7 +404,9 @@ async def test_login_accepts_chrome_opaque_same_origin_navigation(
 
 
 @pytest.mark.asyncio
-@app_settings(ui={"authentication": "builtin"})
+@app_settings(
+    ui={"identity_workflow_mode": "builtin", "management_authentication": "builtin"},
+)
 async def test_landing_and_standalone_login_use_root(
     client: httpx.AsyncClient,
     verified_user_credentials: UserCredentials,
@@ -242,6 +417,8 @@ async def test_landing_and_standalone_login_use_root(
     assert "Zero Auth Lite" in landing.text
     assert 'href="/login"' in landing.text
     assert 'href="/api/docs"' in landing.text
+    assert 'class="auth-card"' in landing.text
+    assert 'class="app-header"' not in landing.text
 
     page = await client.get("/login")
     response = await client.post(
@@ -257,19 +434,64 @@ async def test_landing_and_standalone_login_use_root(
 
     assert response.status_code == status.HTTP_303_SEE_OTHER
     assert response.headers["location"] == "/"
-    authenticated_landing = await client.get("/")
+    authenticated_landing = await client.get("/", follow_redirects=False)
     authenticated_login = await client.get("/login", follow_redirects=False)
     for authenticated_response in (authenticated_landing, authenticated_login):
         assert not any(
             cookie.startswith("sessionid=")
             for cookie in authenticated_response.headers.get_list("set-cookie")
         )
-    assert 'href="/logout"' in authenticated_landing.text
+    assert authenticated_landing.status_code == status.HTTP_303_SEE_OTHER
+    assert authenticated_landing.headers["location"] == "/management"
+    dashboard = await client.get("/management")
+    assert 'href="/logout"' in dashboard.text
+    assert 'class="app-nav app-nav--desktop"' in dashboard.text
+    assert 'href="/management/account"' in dashboard.text
+    assert 'class="app-header"' in dashboard.text
+    assert "Admin User" in dashboard.text
+    assert "Test Organization" in dashboard.text
+    assert 'class="app-identity"' in dashboard.text
+    assert '<div class="brand brand--compact">' in dashboard.text
+    assert 'class="dashboard-grid"' in dashboard.text
+    assert 'href="/management" aria-current="page"' in dashboard.text
     assert authenticated_login.status_code == status.HTTP_303_SEE_OTHER
 
 
 @pytest.mark.asyncio
-@app_settings(ui={"authentication": "builtin"})
+@app_settings(ui={"management_authentication": "builtin"})
+async def test_logout_accepts_cached_form_csrf(
+    client: httpx.AsyncClient,
+    verified_user_credentials: UserCredentials,
+) -> None:
+    """Revoke a browser session using the documented CSRF form field."""
+    login_page = await client.get("/login")
+    await client.post(
+        "/login",
+        data={
+            "email": verified_user_credentials.email,
+            "password": verified_user_credentials.password,
+            "csrf_token": _hidden_value(login_page, "csrf_token"),
+        },
+        headers={"Origin": TEST_ORIGIN},
+    )
+    logout_page = await client.get("/logout")
+
+    response = await client.post(
+        "/logout",
+        data={"csrf_token": _hidden_value(logout_page, "csrf_token")},
+        headers={"Origin": TEST_ORIGIN},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == status.HTTP_303_SEE_OTHER
+    assert response.headers["location"] == "/login?notice=signed-out"
+    assert (await client.get("/management", follow_redirects=False)).status_code == (
+        status.HTTP_303_SEE_OTHER
+    )
+
+
+@pytest.mark.asyncio
+@app_settings(ui={"management_authentication": "builtin"})
 async def test_login_form_remains_valid_after_a_second_page_load(
     client: httpx.AsyncClient,
     verified_user_credentials: UserCredentials,
@@ -297,7 +519,9 @@ async def test_login_form_remains_valid_after_a_second_page_load(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("path", ["/", "/login"])
-@app_settings(ui={"authentication": "builtin"})
+@app_settings(
+    ui={"identity_workflow_mode": "builtin", "management_authentication": "builtin"},
+)
 async def test_public_pages_clear_a_stale_session_cookie(
     client: httpx.AsyncClient,
     path: str,
@@ -314,7 +538,7 @@ async def test_public_pages_clear_a_stale_session_cookie(
 
 @pytest.mark.asyncio
 @pytest.mark.negative
-@app_settings(ui={"authentication": "builtin"})
+@app_settings(ui={"management_authentication": "builtin"})
 async def test_logout_page_clears_a_stale_session_and_returns_to_login(
     client: httpx.AsyncClient,
 ) -> None:
@@ -336,15 +560,21 @@ async def test_logout_page_clears_a_stale_session_and_returns_to_login(
 @pytest.mark.asyncio
 @app_settings(
     ui={
-        "authentication": "external",
-        "external_login_url": "https://frontend.example/login",
+        "management_authentication": "builtin",
+        "oauth2_interaction": "external",
+        "urls": {
+            "authorization_interaction": (
+                "https://frontend.example/oauth2/interaction"
+            ),
+            "device_interaction": "https://frontend.example/oauth2/interaction",
+        },
     },
 )
-async def test_authorization_uses_the_external_login_destination(
+async def test_external_oauth2_interaction_preserves_builtin_management_login(
     app: FastAPI,
     client: httpx.AsyncClient,
 ) -> None:
-    """Send browser authentication to the configured external frontend."""
+    """Keep management login local while OAuth2 uses its external frontend."""
     await create_public_authorization_code_client(app)
 
     response = await client.get(
@@ -356,13 +586,17 @@ async def test_authorization_uses_the_external_login_destination(
     destination = urlparse(response.headers["location"])
     assert response.status_code == status.HTTP_303_SEE_OTHER
     assert f"{destination.scheme}://{destination.netloc}{destination.path}" == (
-        "https://frontend.example/login"
+        "https://frontend.example/oauth2/interaction"
     )
     assert parse_qs(destination.query)["transaction_id"]
 
+    management = await client.get("/management", follow_redirects=False)
+    assert management.status_code == status.HTTP_303_SEE_OTHER
+    assert management.headers["location"] == "/login?return_url=%2Fmanagement"
+
 
 @pytest.mark.asyncio
-@app_settings(ui={"authentication": "builtin"})
+@app_settings(ui={"management_authentication": "builtin"})
 async def test_standalone_login_accepts_only_an_internal_return_target(
     client: httpx.AsyncClient,
     verified_user_credentials: UserCredentials,
@@ -387,7 +621,7 @@ async def test_standalone_login_accepts_only_an_internal_return_target(
 
 @pytest.mark.asyncio
 @app_settings(
-    ui={"authentication": "builtin"},
+    ui={"identity_workflow_mode": "builtin", "management_authentication": "builtin"},
     default_redirect_url="https://application.example/dashboard?source=auth#complete",
 )
 async def test_standalone_login_uses_configured_default_redirect(
@@ -414,74 +648,8 @@ async def test_standalone_login_uses_configured_default_redirect(
 
 
 @pytest.mark.asyncio
-@app_settings(
-    ui={"authentication": "builtin"},
-    default_redirect_url="https://application.example/dashboard?source=auth#complete",
-    session={"enabled": False},
-    oauth2={
-        "authorization_code_enabled": False,
-        "device_code_enabled": False,
-        "oidc_enabled": False,
-    },
-)
-async def test_sessionless_registration_preserves_external_destination(
-    client: httpx.AsyncClient,
-) -> None:
-    """Preserve an external destination without exporting Zero Auth Lite notices."""
-    page = await client.get("/register")
-
-    response = await client.post(
-        "/register",
-        data={
-            "email": "sessionless-default@example.com",
-            "password": "S3ssionlessPass!",
-            "organization_name": "Sessionless Registration",
-            "csrf_token": _hidden_value(page, "csrf_token"),
-        },
-        headers={"Origin": TEST_ORIGIN},
-        follow_redirects=False,
-    )
-
-    assert response.status_code == status.HTTP_303_SEE_OTHER
-    assert response.headers["location"] == (
-        "https://application.example/dashboard?source=auth#complete"
-    )
-
-
-@pytest.mark.asyncio
-@app_settings(
-    ui={"authentication": "builtin"},
-    session={"enabled": False},
-    oauth2={
-        "authorization_code_enabled": False,
-        "device_code_enabled": False,
-        "oidc_enabled": False,
-    },
-)
-async def test_sessionless_registration_uses_root_without_default_destination(
-    client: httpx.AsyncClient,
-) -> None:
-    """Use the server root when no login or application destination exists."""
-    page = await client.get("/register")
-    response = await client.post(
-        "/register",
-        data={
-            "email": "sessionless-root@example.com",
-            "password": "S3ssionlessPass!",
-            "organization_name": "Sessionless Registration",
-            "csrf_token": _hidden_value(page, "csrf_token"),
-        },
-        headers={"Origin": TEST_ORIGIN},
-        follow_redirects=False,
-    )
-
-    assert response.status_code == status.HTTP_303_SEE_OTHER
-    assert response.headers["location"] == "/"
-
-
-@pytest.mark.asyncio
 @pytest.mark.negative
-@app_settings(ui={"authentication": "builtin"})
+@app_settings(ui={"management_authentication": "builtin"})
 async def test_independent_login_ignores_arbitrary_return_url(
     client: httpx.AsyncClient,
     verified_user_credentials: UserCredentials,
@@ -506,7 +674,7 @@ async def test_independent_login_ignores_arbitrary_return_url(
 
 @pytest.mark.asyncio
 @pytest.mark.negative
-@app_settings(ui={"authentication": "builtin"})
+@app_settings(ui={"management_authentication": "builtin"})
 async def test_unknown_consent_interaction_is_safe(
     client: httpx.AsyncClient,
     verified_user_credentials: UserCredentials,
@@ -531,7 +699,15 @@ async def test_unknown_consent_interaction_is_safe(
 
 @pytest.mark.asyncio
 @app_settings(
-    ui={"authentication": "external", "oauth2_interaction": "disabled"},
+    ui={
+        "identity_workflow_mode": "external",
+        "management_authentication": "external",
+        "oauth2_interaction": "disabled",
+        "urls": {
+            "login": "https://frontend.example/login",
+            "logout": "https://frontend.example/logout",
+        },
+    },
     oauth2={"device_code_enabled": False},
 )
 async def test_disabled_ui_keeps_protocol_and_denies_required_interaction(

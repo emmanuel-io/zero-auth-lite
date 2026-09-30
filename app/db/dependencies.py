@@ -66,15 +66,11 @@ async def independent_transaction(
         yield session
 
 
+# Request-scoped SQLAlchemy session committed before the response is sent.
 DbSessionDep = Annotated[
     "AsyncSession",
     Depends(get_db_session, scope="function"),
 ]
-"""Alias for injecting an AsyncSession.
-Usage:
-    def route(db_session: DbSessionDep):
-        ...
-"""
 
 DbSessionFactoryDep = Annotated[
     "async_sessionmaker[AsyncSession]",

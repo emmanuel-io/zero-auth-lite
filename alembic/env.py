@@ -9,13 +9,13 @@ from typing import TYPE_CHECKING
 from alembic import context
 from app.db.base import Base
 from app.db.engine import create_engine, sqlite_url
-from app.settings.root import load_settings
+from app.settings.root import load_database_settings
 
 from app.db import alembic as _server_alembic
 
 
 if TYPE_CHECKING:
-    from app.settings.root import Settings
+    from app.settings.root import DatabaseSettings
     from sqlalchemy.engine import Connection
 
 
@@ -24,19 +24,19 @@ _ = _server_alembic
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 
 
-def _load_database_settings() -> Settings:
-    """Load settings and ensure the canonical database directory exists."""
-    settings = load_settings()
+def _load_database_settings() -> DatabaseSettings:
+    """Load database settings and ensure the canonical directory exists."""
+    settings = load_database_settings()
     settings.db_path.parent.mkdir(parents=True, exist_ok=True)
     return settings
 
 
-def _configure_database_url(settings: Settings) -> None:
+def _configure_database_url(settings: DatabaseSettings) -> None:
     """Populate the Alembic config from canonical server settings."""
     database_url = sqlite_url(settings.db_path)
     config.set_main_option(

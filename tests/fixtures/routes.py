@@ -14,9 +14,9 @@ from alembic.config import Config
 from app.db.models.organization import OrganizationDB
 from app.db.models.organization_membership import OrganizationMembershipDB
 from app.db.models.user import UserDB, UserEmailDB
-from app.identity.users.enums import OrganizationUserRole, UserEmailStatus
+from app.identity.users.enums import OrganizationMembershipRole, UserEmailStatus
 from app.main import create_app
-from app.oauth2.oidc.keys import get_signing_key, get_verify_key
+from app.oauth2.signing.keys import get_signing_key, get_verify_key
 from app.settings.root import Settings
 from asgi_lifespan import LifespanManager
 from fastapi import FastAPI
@@ -61,17 +61,17 @@ def _configure_test_environment(
     tmp_path: Path,
 ) -> None:
     """Set the isolated environment used by route-level HTTP tests."""
-    prv_key_b64, pub_key_b64 = _raw_oauth2_key_pair_b64()
+    signing_private_key_b64, signing_public_key_b64 = _raw_oauth2_key_pair_b64()
     monkeypatch.setenv(
         "ZA_DB_PATH",
         str(tmp_path / "zero_auth.db"),
     )
     monkeypatch.setenv("ZA_RUNTIME_DIR", str(tmp_path))
-    monkeypatch.setenv("ZA_OAUTH2__PRV_KEY_B64", prv_key_b64)
-    monkeypatch.setenv("ZA_OAUTH2__PUB_KEY_B64", pub_key_b64)
-    monkeypatch.setenv("ZA_OAUTH2__JWT_ISSUER", "https://issuer.test")
-    monkeypatch.setenv("ZA_OAUTH2__JWT_AUDIENCE", "test-zero-auth-lite-api")
-    monkeypatch.setenv("ZA_OAUTH2__JWT_KEY_ID", "test-key")
+    monkeypatch.setenv("ZA_OAUTH2__SIGNING_PRIVATE_KEY_B64", signing_private_key_b64)
+    monkeypatch.setenv("ZA_OAUTH2__SIGNING_PUBLIC_KEY_B64", signing_public_key_b64)
+    monkeypatch.setenv("ZA_OAUTH2__ISSUER", "https://issuer.test")
+    monkeypatch.setenv("ZA_OAUTH2__ACCESS_TOKEN_AUDIENCE", "test-zero-auth-lite-api")
+    monkeypatch.setenv("ZA_OAUTH2__SIGNING_KEY_ID", "test-key")
     monkeypatch.setenv("ZA_OAUTH2__JWKS_ENABLED", "true")
     monkeypatch.setenv("ZA_OAUTH2__OIDC_ENABLED", "true")
     monkeypatch.setenv("ZA_OAUTH2__ALLOW_CLIENT_SECRET_POST", "false")
@@ -87,19 +87,18 @@ def _configure_test_environment(
         "ZA_OAUTH2__TOKEN_HASH_SECRET",
         "test-oauth2-token-hash-secret-with-more-than-32-bytes",
     )
-    monkeypatch.setenv("ZA_SESSION__COOKIE_DOMAIN", "")
-    monkeypatch.setenv("ZA_SESSION__COOKIE_SECURE", "false")
+    monkeypatch.setenv("ZA_BROWSER_SESSION__COOKIE_DOMAIN", "")
+    monkeypatch.setenv("ZA_BROWSER_SESSION__COOKIE_SECURE", "false")
     monkeypatch.setenv(
-        "ZA_SESSION__ID_HASH_SECRET",
+        "ZA_BROWSER_SESSION__HASH_SECRET",
         "test-session-id-hash-secret-with-more-than-32-bytes",
     )
-    monkeypatch.setenv("ZA_SESSION__CSRF__COOKIE_DOMAIN", "")
-    monkeypatch.setenv("ZA_SESSION__CSRF__COOKIE_SECURE", "false")
+    monkeypatch.setenv("ZA_BROWSER_SESSION__CSRF__COOKIE_DOMAIN", "")
+    monkeypatch.setenv("ZA_BROWSER_SESSION__CSRF__COOKIE_SECURE", "false")
     monkeypatch.setenv("ZA_MAIL__ENABLED", "false")
-    monkeypatch.setenv("ZA_UI__AUTHENTICATION", "external")
     monkeypatch.setenv(
-        "ZA_UI__EXTERNAL_LOGIN_URL",
-        "https://frontend.test/login",
+        "ZA_UI__URLS__DEVICE_INTERACTION",
+        "https://auth.zero-auth-lite.localhost:8443/oauth2/device/verify",
     )
     monkeypatch.delenv("ZA_DEFAULT_REDIRECT_URL", raising=False)
     monkeypatch.delenv("ZA_BOOTSTRAP__OPERATOR_EMAIL", raising=False)
@@ -223,7 +222,7 @@ async def verified_user_credentials(app: FastAPI) -> UserCredentials:
             OrganizationMembershipDB(
                 user_id=user.id,
                 organization_id=organization.id,
-                role=OrganizationUserRole.ADMIN,
+                role=OrganizationMembershipRole.ADMIN,
             )
         )
         await session.commit()

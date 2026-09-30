@@ -1,6 +1,7 @@
 """FastAPI route behavior specific to OAuth2 protocol endpoints."""
 
 from collections.abc import Callable, Coroutine
+from logging import getLogger
 from typing import Any
 
 from fastapi import Request, Response
@@ -8,11 +9,15 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
 
 from app.db.errors import DatabaseBusyError
+from app.oauth2.error_codes import OAuth2ErrorCode
 from app.oauth2.errors import OAuth2ProtocolError
 
 
+logger = getLogger(__name__)
+
+
+# Marks OpenAPI operations that use OAuth2 protocol error semantics.
 PROTOCOL_OPENAPI_MARKER = "x-zero-auth-lite-oauth2-protocol"
-"""OpenAPI marker for routes using OAuth2 protocol error semantics."""
 
 
 class OAuth2ProtocolRoute(APIRoute):
@@ -32,19 +37,30 @@ class OAuth2ProtocolRoute(APIRoute):
             try:
                 return await original_handler(request)
             except RequestValidationError as exc:
-                error = "invalid_request"
+                error = OAuth2ErrorCode.INVALID_REQUEST
                 if any(
                     tuple(item.get("loc", ()))[-1:] == ("grant_type",)
                     and item.get("type") in {"enum", "literal_error"}
                     for item in exc.errors()
                 ):
-                    error = "unsupported_grant_type"
+                    error = OAuth2ErrorCode.UNSUPPORTED_GRANT_TYPE
                 raise OAuth2ProtocolError(error=error) from exc
             except DatabaseBusyError as exc:
                 raise OAuth2ProtocolError(
-                    error="temporarily_unavailable",
+                    error=OAuth2ErrorCode.TEMPORARILY_UNAVAILABLE,
                     status_code=exc.status,
                     headers=exc.headers,
+                ) from exc
+            except OAuth2ProtocolError:
+                raise
+            except Exception as exc:
+                logger.exception(
+                    "Unexpected OAuth2 protocol route failure",
+                    extra={"exception_type": type(exc).__name__},
+                )
+                raise OAuth2ProtocolError(
+                    error=OAuth2ErrorCode.SERVER_ERROR,
+                    status_code=500,
                 ) from exc
 
         return protocol_route_handler

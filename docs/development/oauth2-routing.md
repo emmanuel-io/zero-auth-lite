@@ -22,7 +22,7 @@ in `app/oauth2/protocol_route.py`.
 
 - `app/oauth2/authorization/router.py`
 - `app/oauth2/devices/router.py`
-- `app/oauth2/routers/tokens.py`
+- `app/oauth2/tokens/router.py`
 
 It catches FastAPI `RequestValidationError` and maps it to OAuth2 errors
 without changing application APIs outside the protocol routers.

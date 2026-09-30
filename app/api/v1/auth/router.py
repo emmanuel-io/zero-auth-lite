@@ -16,7 +16,7 @@ from app.settings.root import Settings
 def create_auth_router(settings: Settings) -> APIRouter:
     """Compose public authentication workflows from the startup policy."""
     router = APIRouter()
-    if settings.auth.registration_enabled:
+    if settings.identity_workflow.registration_enabled:
         router.include_router(registration_router)
         router.include_router(email_verification_request_router)
     router.include_router(email_verification_confirmation_router)

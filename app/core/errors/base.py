@@ -1,6 +1,6 @@
 """Application base error serialized by the server error handler."""
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from typing import ClassVar
 
 from fastapi import status
@@ -20,26 +20,15 @@ class AppError(RuntimeError):
     detail_message: ClassVar[str | None] = None
     redact_details_in_deployment: ClassVar[bool] = False
 
-    def __init__(self, *args: object) -> None:
-        """Initialize and optionally format the message with positional values."""
-        super().__init__(*args)
-        self._formatted_message = self._format_message(args=args)
-
-    @property
-    def formatted_message(self) -> str:
-        """Return the client-safe formatted error message."""
-        return self._formatted_message
-
-    @property
-    def payload(self) -> ErrorResponse:
-        """Return the error payload serialized by the HTTP adapter."""
-        return self.response_payload()
+    def __init__(self) -> None:
+        """Initialize an error with its declared client-safe message."""
+        super().__init__(self.message)
 
     def response_payload(self, *, include_details: bool = True) -> ErrorResponse:
         """Return the client payload, optionally omitting diagnostic details."""
         return ErrorResponse(
             code=self.code,
-            message=self.formatted_message,
+            message=self.message,
             details=self._details() if include_details else [],
         )
 
@@ -66,15 +55,6 @@ class AppError(RuntimeError):
             )
         ]
 
-    def _format_message(self, *, args: Iterable[object]) -> str:
-        """Return a formatted message when arguments match its template."""
-        if args:
-            try:
-                return self.message % tuple(args)
-            except TypeError:
-                pass
-        return self.message
-
     def __str__(self) -> str:
         """Return a compact debug representation."""
-        return f"[{self.code}] {self.formatted_message}"
+        return f"[{self.code}] {self.message}"

@@ -1,4 +1,4 @@
-# API Identifiers Hide Persistence Keys
+# API Identifiers Use Raw UUIDv4 Values
 
 ## Context
 
@@ -19,22 +19,23 @@ query parameter, form field, or path-parameter name.
 
 The values accepted and returned by the API are always the stable external
 identifiers. Internal database primary keys are never accepted or serialized.
-Prefixes such as `usr_`, `org_`, `ses_`, and `oas_` make the external resource
-type explicit without revealing the persistence model. Protocol-defined names
-such as OAuth2 `client_id` and OpenID Connect `sub` keep their standard meaning.
-The current-user authorization view is a projection of an OAuth2 session, so it
-reuses that session's `oas_` identifier instead of introducing a second identity
-for the same persisted resource.
+Public resources use raw UUIDv4 values. Field and parameter names provide the
+resource context, so identifiers have no `usr_`, `org_`, `ses_`, `oas_`, or
+client prefix. Protocol-defined names such as OAuth2 `client_id` and OpenID
+Connect `sub` keep their standard meaning. HTTP responses and JWT claims use
+the canonical lowercase, hyphenated representation.
 
-Snowflake-backed identifiers use a lowercase resource prefix, `_`, and exactly
-13 uppercase Crockford Base32 characters. The payload uses
-`0123456789ABCDEFGHJKMNPQRSTVWXYZ`, is left-padded with `0`, and has one
-canonical spelling: lowercase, aliases, signs, separators, and 19-digit decimal
-forms are rejected. The first payload character is `0`
-through `7` because the stored value must fit in a positive signed `int64`.
-Encoding changes only the HTTP, token-claim, and structured-output boundary;
-database columns, primary and foreign keys, indexes, and Snowflake generation
-remain integers and database lookups use the decoded integer.
+Application code uses `uuid.UUID`, HTTP models use Pydantic `UUID4`, and
+SQLite stores values through SQLAlchemy `Uuid(as_uuid=True)`. UUIDv4 avoids a
+custom codec, node leasing, clock-rollback handling, and shared generator state.
+Its costs are larger indexes than 64-bit integers, random insertion order, and
+less human-friendly values. Internal relational primary and foreign keys remain
+integers, so these costs apply to externally addressable columns and their
+indexes rather than every relationship.
+
+This is an intentionally breaking development-schema baseline. Databases and
+OAuth2 clients created with the former identifier scheme must be recreated;
+there is no mixed reader, alias, or data migration.
 
 Application models, repositories, and services may use `public_id` internally
 when they must distinguish the external identifier from a database primary

@@ -12,7 +12,7 @@ from app.db.dependencies import DbSessionDep
 from app.db.models.oauth2_authorization_transaction import (
     OAuth2AuthorizationTransactionDB,
 )
-from app.oauth2.authorization.transaction_dtos import (
+from app.oauth2.authorization.dtos import (
     AuthorizationTransactionCreateDTO,
     AuthorizationTransactionReadDTO,
 )

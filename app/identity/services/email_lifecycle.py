@@ -5,9 +5,8 @@ from datetime import datetime, UTC
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors.common import ObjectAlreadyExistsError
 from app.db.models.user import UserDB
-from app.errors import ObjectAlreadyExistsError
-from app.identity.services.lifecycle_policy import EmailUpdatePolicy
 from app.identity.users.commands import UserUpdateCommand
 from app.identity.users.emails import (
     create_user_email,
@@ -15,14 +14,43 @@ from app.identity.users.emails import (
     normalize_email,
     retire_email,
 )
-from app.identity.users.enums import UserEmailStatus
+from app.identity.users.enums import (
+    EmailUpdatePolicy,
+    OrganizationMembershipRole,
+    UserEmailStatus,
+)
 
 
 @dataclass(frozen=True, slots=True)
-class PreparedUserUpdate:
-    """Prepared user changes and their email lifecycle effects."""
+class UserColumnChanges:
+    """Immutable, explicitly typed changes to columns on the user row."""
 
-    changes: dict[str, object]
+    first_name: str | None
+    last_name: str | None
+    is_active: bool | None
+    is_operator: bool | None
+
+    def values(self) -> dict[str, str | bool]:
+        """Return only selected column changes for the SQL update."""
+        values: dict[str, str | bool] = {}
+        if self.first_name is not None:
+            values["first_name"] = self.first_name
+        if self.last_name is not None:
+            values["last_name"] = self.last_name
+        if self.is_active is not None:
+            values["is_active"] = self.is_active
+        if self.is_operator is not None:
+            values["is_operator"] = self.is_operator
+        return values
+
+
+@dataclass(frozen=True, slots=True)
+class EmailUpdateEffects:
+    """Immutable user, membership, and notification effects of an email update."""
+
+    user_changes: UserColumnChanges
+    role: OrganizationMembershipRole | None
+    organization_id: int | None
     send_email_change: bool = False
     resend_invite: bool = False
     email_security_changed: bool = False
@@ -62,17 +90,16 @@ class UserEmailLifecycleService:
         )
         target.emails.append(row)
 
-    async def prepare_update(
+    async def apply_update(
         self,
         *,
         target: UserDB,
         command: UserUpdateCommand,
         policy: EmailUpdatePolicy,
-    ) -> PreparedUserUpdate:
+    ) -> EmailUpdateEffects:
         """Apply email state changes and return remaining user-column updates."""
-        changes = command.changes()
-        requested_email = changes.pop("email", None)
-        requested_verified = changes.pop("email_verified", None)
+        requested_email = command.email
+        requested_verified = command.email_verified
         email_security_changed = False
         send_email_change = False
         resend_invite = False
@@ -121,8 +148,15 @@ class UserEmailLifecycleService:
                 email_security_changed = True
                 await self.db_session.flush()
 
-        return PreparedUserUpdate(
-            changes=changes,
+        return EmailUpdateEffects(
+            user_changes=UserColumnChanges(
+                first_name=command.first_name,
+                last_name=command.last_name,
+                is_active=command.is_active,
+                is_operator=command.is_operator,
+            ),
+            role=command.role,
+            organization_id=command.organization_id,
             send_email_change=send_email_change,
             resend_invite=resend_invite,
             email_security_changed=email_security_changed,

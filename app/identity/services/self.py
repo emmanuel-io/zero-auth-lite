@@ -3,13 +3,12 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors.common import ObjectNotFoundError
 from app.db.models.organization import OrganizationDB
 from app.db.models.organization_membership import OrganizationMembershipDB
 from app.db.models.user import UserDB
-from app.errors import ObjectNotFoundError
 from app.identity.organizations.dtos import OrganizationSelfReadDTO
 from app.identity.services.lifecycle import UserLifecycleService
-from app.identity.services.lifecycle_policy import EmailUpdatePolicy
 from app.identity.users.commands import UserUpdateCommand
 from app.identity.users.dtos import (
     to_user_self_read_dto,
@@ -18,7 +17,8 @@ from app.identity.users.dtos import (
     UserSelfReadDTO,
 )
 from app.identity.users.emails import active_email_loader
-from app.security.dtos import UserPrincipalContext
+from app.identity.users.enums import EmailUpdatePolicy
+from app.security.principals import UserPrincipalContext
 
 
 class UserSelfService:

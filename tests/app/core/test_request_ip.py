@@ -126,19 +126,14 @@ def test_clean_forwarded_ip_handles_empty_ipv6_and_host_port_values() -> None:
     assert _clean_forwarded_ip("198.51.100.10:1234") == "198.51.100.10"
 
 
-def test_invalid_trusted_proxy_values_are_ignored() -> None:
-    """Assert invalid peer and CIDR values are treated as untrusted."""
+def test_invalid_peer_value_is_untrusted() -> None:
+    """Assert a malformed socket peer cannot match a trusted network."""
     assert (
         _is_trusted_proxy(
             peer="not-an-ip",
-            trusted_proxy_ips=["127.0.0.1"],
-        )
-        is False
-    )
-    assert (
-        _is_trusted_proxy(
-            peer="127.0.0.1",
-            trusted_proxy_ips=["not-a-cidr"],
+            trusted_proxy_ips=AppSettings(
+                trusted_proxy_ips=("127.0.0.1",),
+            ).trusted_proxy_ips,
         )
         is False
     )

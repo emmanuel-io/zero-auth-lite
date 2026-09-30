@@ -17,13 +17,18 @@ organization likewise removes the OAuth2 artifacts that refer to it. These casca
 are an invalidation rule: no authorization code, device flow, session, or token
 remains usable after its owning security principal is deleted.
 
-It runs cleanup once at startup, then repeats according to
-`ZA_OAUTH2__CLEANUP_INTERVAL_SECONDS`. The worker removes expired or
+It drains the records that are already eligible at startup, then repeats
+according to `ZA_OAUTH2__CLEANUP_INTERVAL_SECONDS`. The worker removes expired or
 consumed authorization codes, authorization transactions, device
-authorizations, SQL token pairs, and ended or orphaned OAuth2 sessions. When
-the worker removes an expired token pair, the now-orphaned session and its
+authorizations, SQL token states, and ended or orphaned OAuth2 sessions. When
+the worker removes an expired token state, the now-orphaned session and its
 consumed refresh-token history are removed in the same or a later bounded run
 through relational cascade rules.
+
+Each transaction deletes at most `ZA_OAUTH2__CLEANUP_BATCH_SIZE` rows from each
+category. The worker yields between transactions and reuses the cutoff captured
+at the start of the pass, so a large backlog drains without turning newly
+expired records into an unbounded run.
 
 Run exactly one scheduler for a database. Do not run the continuous worker and
 a cron job at the same time. Cleanup is idempotent, but duplicate schedulers add
@@ -48,6 +53,9 @@ For cron, a systemd timer, or a managed scheduler, use one-shot mode:
 ```bash
 uv run python -m app.oauth2.cleanup_worker --once
 ```
+
+One-shot mode drains the complete finite backlog that was eligible when the
+command started, using the same bounded transactions, and then exits.
 
 With Compose, invoke the same one-shot command in a temporary container:
 

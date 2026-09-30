@@ -73,6 +73,7 @@ def test_oauth2_router_is_empty_without_enabled_capabilities() -> None:
     paths = _route_paths(settings)
 
     assert paths == set()
+    assert _route_names(settings) == set()
 
 
 def test_oauth2_router_mounts_jwks_independently_of_oidc() -> None:
@@ -81,7 +82,12 @@ def test_oauth2_router_mounts_jwks_independently_of_oidc() -> None:
     settings = Settings(oauth2=oauth2)
 
     paths = _route_paths(settings)
+    names = _route_names(settings)
 
     assert "/oauth2/jwks.json" in paths
     assert "/oauth2/userinfo" not in paths
     assert "/.well-known/openid-configuration" not in paths
+    assert "jwks" in names
+    assert "userinfo" not in names
+    assert "userinfo_get" not in names
+    assert "openid_configuration" not in names

@@ -5,11 +5,11 @@ from fastapi import status
 from app.core.errors.base import AppError
 
 
-class OAuth2AuthorizationNotFoundError(AppError):
-    """Raised when a user does not own the requested OAuth2 authorization."""
+class OAuth2SessionNotFoundError(AppError):
+    """Raised when a user does not own the requested OAuth2 session."""
 
-    code = "OAUTH2_AUTHORIZATION_NOT_FOUND"
-    message = "OAuth2 authorization not found."
+    code = "OAUTH2_SESSION_NOT_FOUND"
+    message = "OAuth2 session not found."
     status = status.HTTP_404_NOT_FOUND
 
 

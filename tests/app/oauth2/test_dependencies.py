@@ -3,6 +3,7 @@
 from types import SimpleNamespace
 
 import pytest
+from app.oauth2.error_codes import OAuth2ErrorCode
 from app.oauth2.error_handler import oauth2_protocol_error_handler
 from app.oauth2.errors import OAuth2ProtocolError
 from fastapi import status
@@ -15,8 +16,8 @@ pytestmark = pytest.mark.integration
 async def test_oauth2_protocol_error_handler_omits_optional_description() -> None:
     """Assert OAuth2 errors serialize without optional description when absent."""
     response = await oauth2_protocol_error_handler(
-        request=SimpleNamespace(),  # type: ignore[arg-type]
-        exc=OAuth2ProtocolError(error="invalid_request"),
+        request=SimpleNamespace(),  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+        exc=OAuth2ProtocolError(error=OAuth2ErrorCode.INVALID_REQUEST),
     )
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
@@ -28,9 +29,9 @@ async def test_oauth2_protocol_error_handler_omits_optional_description() -> Non
 async def test_oauth2_protocol_error_handler_includes_description() -> None:
     """Assert OAuth2 errors serialize optional descriptions when present."""
     response = await oauth2_protocol_error_handler(
-        request=SimpleNamespace(),  # type: ignore[arg-type]
+        request=SimpleNamespace(),  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
         exc=OAuth2ProtocolError(
-            error="invalid_request",
+            error=OAuth2ErrorCode.INVALID_REQUEST,
             error_description="Missing redirect_uri",
         ),
     )

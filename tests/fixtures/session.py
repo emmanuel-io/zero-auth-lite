@@ -3,13 +3,13 @@
 from datetime import datetime, UTC
 
 import pytest_asyncio
-from app.browser_sessions.dtos import SessionCreateDTO, SessionReadDTO
+from app.browser_sessions.dtos import BrowserSessionCreateDTO, BrowserSessionReadDTO
 from app.browser_sessions.mapping import to_session_dto
 from app.db.models.browser_session import BrowserSessionDB
 from app.db.models.organization import OrganizationDB
 from app.db.models.organization_membership import OrganizationMembershipDB
 from app.db.models.user import UserDB, UserEmailDB
-from app.identity.users.enums import OrganizationUserRole, UserEmailStatus
+from app.identity.users.enums import OrganizationMembershipRole, UserEmailStatus
 from fastapi import FastAPI
 from sqlalchemy import insert, select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
@@ -27,7 +27,7 @@ class BrowserSessionFixture:
         self.db_session = db_session
         self.session_factory = session_factory
 
-    async def create(self, *, dto: SessionCreateDTO) -> None:
+    async def create(self, *, dto: BrowserSessionCreateDTO) -> None:
         """Insert one browser-session row."""
         self.db_session.add(
             BrowserSessionDB(
@@ -43,7 +43,7 @@ class BrowserSessionFixture:
         )
         await self.db_session.flush()
 
-    async def read(self, *, session_id: str) -> SessionReadDTO | None:
+    async def read(self, *, session_id: str) -> BrowserSessionReadDTO | None:
         """Read one browser-session DTO."""
         row = await self.db_session.scalar(
             select(BrowserSessionDB).where(BrowserSessionDB.id == session_id)
@@ -102,7 +102,7 @@ async def session_store_user_id(db_session: AsyncSession) -> int:
         OrganizationMembershipDB(
             user_id=user.id,
             organization_id=organization.id,
-            role=OrganizationUserRole.MEMBER,
+            role=OrganizationMembershipRole.MEMBER,
         )
     )
     await db_session.flush()

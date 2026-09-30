@@ -6,12 +6,12 @@ import httpx
 import pytest
 from app.db.models.organization_membership import OrganizationMembershipDB
 from app.db.models.user import UserDB
-from app.identity.users.enums import OrganizationUserRole
-from app.public_ids import PUBLIC_ID_PAYLOAD_PATTERN
+from app.identity.users.enums import OrganizationMembershipRole
 from fastapi import FastAPI, status
 from sqlalchemy import select, update
 
 from tests.fixtures.auth import current_user_id_for_email, UserCredentials
+from tests.identifiers import UUID4_PATTERN
 from tests.routes.api.helpers import login_headers
 
 
@@ -44,8 +44,10 @@ async def test_organization_admin_can_read_and_patch_current_organization(
     )
 
     assert read_response.status_code == status.HTTP_200_OK
+    assert read_response.headers["Cache-Control"] == "no-store"
+    assert read_response.headers["Pragma"] == "no-cache"
     assert read_response.json()["name"] == "Test Organization"
-    assert re.fullmatch(rf"org_{PUBLIC_ID_PAYLOAD_PATTERN}", read_response.json()["id"])
+    assert re.fullmatch(UUID4_PATTERN, read_response.json()["id"])
     assert patch_response.status_code == status.HTTP_200_OK
     assert patch_response.json()["name"] == "Renamed Organization"
 
@@ -70,7 +72,7 @@ async def test_operator_without_organization_admin_role_cannot_patch_current_org
                 )
                 .scalar_subquery()
             )
-            .values(role=OrganizationUserRole.MEMBER)
+            .values(role=OrganizationMembershipRole.MEMBER)
         )
         await db_session.execute(
             update(UserDB)
@@ -111,7 +113,7 @@ async def test_organization_member_cannot_read_organization_administration_metad
                 )
                 .scalar_subquery()
             )
-            .values(role=OrganizationUserRole.MEMBER)
+            .values(role=OrganizationMembershipRole.MEMBER)
         )
         await db_session.execute(
             update(UserDB)

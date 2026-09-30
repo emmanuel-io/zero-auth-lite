@@ -1,9 +1,12 @@
 """Tests for OAuth2 device-authorization persistence DTOs."""
 
 from datetime import datetime, timedelta, UTC
+from typing import Any
 
 import pytest
 from app.oauth2.devices.dtos import DeviceAuthorizationReadDTO
+
+from tests.identifiers import deterministic_uuid
 
 
 pytestmark = pytest.mark.unit
@@ -15,11 +18,11 @@ def test_device_authorization_read_requires_persisted_timestamps(
 ) -> None:
     """Do not invent creation or update times for stored device authorization."""
     now = datetime.now(UTC)
-    values = {
+    values: dict[str, Any] = {
         "id": 1,
         "device_code_hash": "device-hash",
         "user_code_hash": "user-hash",
-        "client_id": "client",
+        "client_id": deterministic_uuid("client"),
         "scope": "",
         "expires_at": now + timedelta(minutes=5),
         "interval_seconds": 5,
@@ -30,4 +33,4 @@ def test_device_authorization_read_requires_persisted_timestamps(
     values.pop(missing_field)
 
     with pytest.raises(TypeError):
-        DeviceAuthorizationReadDTO(**values)  # type: ignore[arg-type]
+        DeviceAuthorizationReadDTO(**values)

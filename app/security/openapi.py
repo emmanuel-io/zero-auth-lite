@@ -10,6 +10,13 @@ from fastapi.security import (
 
 from app.browser_sessions.csrf import CSRF_UNSAFE_METHODS
 from app.browser_sessions.enums import CSRFPattern
+from app.http_paths import (
+    API_V1_BROWSER_SESSION_CSRF_PATH,
+    API_V1_BROWSER_SESSION_LOGIN_PATH,
+    API_V1_BROWSER_SESSION_LOGOUT_PATH,
+    OAUTH2_AUTHORIZE_ENDPOINT,
+    OAUTH2_TOKEN_ENDPOINT,
+)
 from app.security.permissions import (
     Permission,
     PERMISSION_DESCRIPTIONS,
@@ -25,8 +32,8 @@ bearer = HTTPBearer(auto_error=False)
 
 
 oauth2_auth_code = OAuth2AuthorizationCodeBearer(
-    authorizationUrl="/oauth2/authorize",
-    tokenUrl="/oauth2/token",
+    authorizationUrl=OAUTH2_AUTHORIZE_ENDPOINT,
+    tokenUrl=OAUTH2_TOKEN_ENDPOINT,
     scopes={
         permission.value: PERMISSION_DESCRIPTIONS[permission]
         for permission in Permission
@@ -40,7 +47,7 @@ def _filter_disabled_security_schemes(
 ) -> None:
     """Remove authentication choices unavailable in this configuration."""
     disabled_schemes: set[str] = set()
-    if not settings.session.enabled:
+    if not settings.browser_session.enabled:
         disabled_schemes.update(
             {"APIKeyCookie", "SessionCSRFHeader", "SessionCSRFCookie"}
         )
@@ -105,7 +112,10 @@ def configure_application_api_security(
                     and "APIKeyCookie" in normalized
                 ):
                     normalized["SessionCSRFHeader"] = []
-                    if settings.session.csrf.pattern == CSRFPattern.DOUBLE_SUBMIT:
+                    if (
+                        settings.browser_session.csrf.pattern
+                        == CSRFPattern.DOUBLE_SUBMIT
+                    ):
                         normalized["SessionCSRFCookie"] = []
                 if normalized and normalized not in security_choices:
                     security_choices.append(normalized)
@@ -124,26 +134,26 @@ def configure_application_api_security(
     security_schemes = schema.setdefault("components", {}).setdefault(
         "securitySchemes", {}
     )
-    if settings.session.enabled:
+    if settings.browser_session.enabled:
         security_schemes["APIKeyCookie"] = {
             "type": "apiKey",
             "in": "cookie",
-            "name": settings.session.cookie_name,
+            "name": settings.browser_session.cookie_name,
         }
         security_schemes["SessionCSRFHeader"] = {
             "type": "apiKey",
             "in": "header",
-            "name": settings.session.csrf.header_name,
+            "name": settings.browser_session.csrf.header_name,
             "description": (
                 "Required with browser-session authentication on state-changing "
                 "requests. The server also validates the request Origin or Referer."
             ),
         }
-        if settings.session.csrf.pattern == CSRFPattern.DOUBLE_SUBMIT:
+        if settings.browser_session.csrf.pattern == CSRFPattern.DOUBLE_SUBMIT:
             security_schemes["SessionCSRFCookie"] = {
                 "type": "apiKey",
                 "in": "cookie",
-                "name": settings.session.csrf.cookie_name,
+                "name": settings.browser_session.csrf.cookie_name,
                 "description": (
                     "Required with the matching CSRF header when double-submit "
                     "browser-session protection is configured."
@@ -157,7 +167,7 @@ def configure_application_api_security(
 
 def _configure_session_login_csrf(schema: dict[str, Any], settings: Settings) -> None:
     """Document configurable pre-session CSRF inputs on the JSON login route."""
-    path_item = schema.get("paths", {}).get("/api/v1/sessions/login")
+    path_item = schema.get("paths", {}).get(API_V1_BROWSER_SESSION_LOGIN_PATH)
     if not isinstance(path_item, dict):
         return
     operation = path_item.get("post")
@@ -167,18 +177,19 @@ def _configure_session_login_csrf(schema: dict[str, Any], settings: Settings) ->
     parameters = operation.setdefault("parameters", [])
     dynamic_parameters = (
         {
-            "name": settings.session.csrf.header_name,
+            "name": settings.browser_session.csrf.header_name,
             "in": "header",
             "required": True,
             "description": "Must match the pre-session CSRF cookie.",
             "schema": {"type": "string"},
         },
         {
-            "name": settings.session.csrf.cookie_name,
+            "name": settings.browser_session.csrf.cookie_name,
             "in": "cookie",
             "required": True,
             "description": (
-                "Pre-session CSRF cookie issued by GET /api/v1/sessions/csrf."
+                "Pre-session CSRF cookie issued by "
+                f"GET {API_V1_BROWSER_SESSION_CSRF_PATH}."
             ),
             "schema": {"type": "string"},
         },
@@ -197,7 +208,7 @@ def _configure_session_login_csrf(schema: dict[str, Any], settings: Settings) ->
 
 def _configure_public_session_csrf(schema: dict[str, Any]) -> None:
     """Keep the optional-cookie CSRF initializer public in OpenAPI."""
-    path_item = schema.get("paths", {}).get("/api/v1/sessions/csrf")
+    path_item = schema.get("paths", {}).get(API_V1_BROWSER_SESSION_CSRF_PATH)
     if not isinstance(path_item, dict):
         return
     operation = path_item.get("get")
@@ -207,7 +218,7 @@ def _configure_public_session_csrf(schema: dict[str, Any]) -> None:
 
 def _configure_session_logout_scope(schema: dict[str, Any]) -> None:
     """Document that the JSON logout scope body is optional."""
-    path_item = schema.get("paths", {}).get("/api/v1/sessions/logout")
+    path_item = schema.get("paths", {}).get(API_V1_BROWSER_SESSION_LOGOUT_PATH)
     if not isinstance(path_item, dict):
         return
     operation = path_item.get("post")

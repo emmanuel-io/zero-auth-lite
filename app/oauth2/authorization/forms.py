@@ -1,4 +1,3 @@
-# ruff: noqa: PLR0913
 """Typed FastAPI inputs for authorization-code endpoints."""
 
 from typing import Annotated, Literal
@@ -11,7 +10,8 @@ from app.oauth2.specs import OAuth2Specs
 class AuthorizationRequestParams:
     """Typed query parameters for an authorization-code request."""
 
-    def __init__(
+    # FastAPI keeps protocol transport fields explicit for validation and OpenAPI.
+    def __init__(  # noqa: PLR0913
         self,
         *,
         response_type: Annotated[
@@ -60,7 +60,8 @@ class AuthorizationRequestParams:
 class AuthorizationRequestForm:
     """Typed form parameters for an authorization-code request."""
 
-    def __init__(
+    # FastAPI keeps protocol transport fields explicit for validation and OpenAPI.
+    def __init__(  # noqa: PLR0913
         self,
         *,
         response_type: Annotated[
@@ -113,7 +114,9 @@ class AuthorizationDecisionForm:
             str, Form(min_length=1, max_length=OAuth2Specs.PROTOCOL_VALUE_LENGTH_MAX)
         ],
         decision: Annotated[Literal["approve", "deny"], Form()],
+        csrf_token: Annotated[str | None, Form()] = None,
     ) -> None:
         """Store validated authorization decision fields."""
         self.transaction_id = transaction_id
         self.decision = decision
+        self.csrf_token = csrf_token

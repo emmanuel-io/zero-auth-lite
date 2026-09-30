@@ -7,11 +7,10 @@ import httpx
 import pytest
 from app.db.models.oauth2_client import OAuth2ClientDB
 from app.db.models.oauth2_session import OAuth2SessionDB
-from app.db.models.oauth2_token_pair import OAuth2TokenPairDB
+from app.db.models.oauth2_token_state import OAuth2TokenStateDB
 from fastapi import FastAPI, status
 from sqlalchemy import select, update
 
-from app.oauth2.clients import client_credentials as client_credentials_workflow
 from tests.fixtures.oauth2 import (
     add_oauth2_principal_routes,
     create_confidential_authorization_code_client,
@@ -20,17 +19,36 @@ from tests.fixtures.oauth2 import (
     decode_unverified_jwt_payload,
 )
 from tests.fixtures.settings import app_settings
+from tests.identifiers import deterministic_uuid
 
 
 pytestmark = pytest.mark.api
 
 
 @pytest.mark.asyncio
+@pytest.mark.negative
+async def test_token_endpoint_rejects_repeated_grant_type(
+    client: httpx.AsyncClient,
+) -> None:
+    """Reject an ambiguous grant before client authentication."""
+    response = await client.post(
+        "/oauth2/token",
+        content="grant_type=client_credentials&grant_type=refresh_token",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.json() == {"error": "invalid_request"}
+
+
+@pytest.mark.asyncio
 @app_settings(
-    session={"enabled": False},
+    identity_workflow={"registration_enabled": False},
+    browser_session={"enabled": False},
     ui={"oauth2_interaction": "disabled"},
     oauth2={
         "authorization_code_enabled": False,
+        "refresh_token_enabled": False,
         "device_code_enabled": False,
         "oidc_enabled": False,
     },
@@ -41,7 +59,9 @@ async def test_client_credentials_works_without_browser_sessions(
 ) -> None:
     """Issue a machine token without browser-session infrastructure."""
     raw_secret = await create_confidential_machine_client(app)
-    basic_payload = base64.b64encode(f"machine-client:{raw_secret}".encode()).decode()
+    basic_payload = base64.b64encode(
+        f"{deterministic_uuid('machine-client')}:{raw_secret}".encode()
+    ).decode()
 
     response = await client.post(
         "/oauth2/token",
@@ -64,7 +84,9 @@ async def test_client_credentials_grant_issues_machine_access_token(
 ) -> None:
     """Assert confidential machine clients can get client-credentials tokens."""
     raw_secret = await create_confidential_machine_client(app)
-    basic_payload = base64.b64encode(f"machine-client:{raw_secret}".encode()).decode()
+    basic_payload = base64.b64encode(
+        f"{deterministic_uuid('machine-client')}:{raw_secret}".encode()
+    ).decode()
 
     response = await client.post(
         "/oauth2/token",
@@ -80,51 +102,54 @@ async def test_client_credentials_grant_issues_machine_access_token(
     assert body["access_token"]
     assert body["refresh_token"] is None
     claims = decode_unverified_jwt_payload(body["access_token"])
-    assert claims["sub"] == "machine-client"
-    assert claims["client_id"] == "machine-client"
+    assert claims["sub"] == str(deterministic_uuid("machine-client"))
+    assert claims["client_id"] == str(deterministic_uuid("machine-client"))
     assert claims["scope"] == "service:read"
     assert "organization" not in claims
     async with app.state.core_session_factory() as db_session:
-        token_pair = await db_session.scalar(select(OAuth2TokenPairDB))
+        token_state = await db_session.scalar(select(OAuth2TokenStateDB))
         oauth2_session = await db_session.scalar(select(OAuth2SessionDB))
-    assert token_pair is not None
+    assert token_state is not None
     assert oauth2_session is not None
     assert oauth2_session.grant_type == "client_credentials"
-    assert token_pair.refresh_token_hash is None
-    assert token_pair.refresh_expires_at is None
+    assert token_state.refresh_token_hash is None
+    assert token_state.refresh_expires_at is None
     assert oauth2_session.organization_id is None
 
 
 @pytest.mark.asyncio
 @pytest.mark.negative
-async def test_client_credentials_does_not_mask_internal_value_error(
+async def test_client_credentials_hides_internal_value_error(
     app: FastAPI,
     client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Let unexpected issuance defects escape the OAuth2 error mapping."""
+    """Return a safe protocol error for unexpected issuance defects."""
     raw_secret = await create_confidential_machine_client(app)
-    basic_payload = base64.b64encode(f"machine-client:{raw_secret}".encode()).decode()
+    basic_payload = base64.b64encode(
+        f"{deterministic_uuid('machine-client')}:{raw_secret}".encode()
+    ).decode()
 
     async def fail_issuance(*_args: object, **_kwargs: object) -> None:
         msg = "unexpected issuance defect"
         raise ValueError(msg)
 
     monkeypatch.setattr(
-        client_credentials_workflow.TokenIssuanceService,
-        "issue_new_session",
+        "app.oauth2.clients.client_credentials.TokenIssuanceService.issue_new_session",
         fail_issuance,
     )
 
-    with pytest.raises(ValueError, match="unexpected issuance defect"):
-        await client.post(
-            "/oauth2/token",
-            data={
-                "grant_type": "client_credentials",
-                "scope": "service:read",
-            },
-            headers={"Authorization": f"Basic {basic_payload}"},
-        )
+    response = await client.post(
+        "/oauth2/token",
+        data={
+            "grant_type": "client_credentials",
+            "scope": "service:read",
+        },
+        headers={"Authorization": f"Basic {basic_payload}"},
+    )
+
+    assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    assert response.json() == {"error": "server_error"}
 
 
 @pytest.mark.asyncio
@@ -139,7 +164,7 @@ async def test_client_credentials_allows_client_secret_post_when_enabled(
         "/oauth2/token",
         data={
             "grant_type": "client_credentials",
-            "client_id": "machine-client",
+            "client_id": str(deterministic_uuid("machine-client")),
             "client_secret": raw_secret,
             "scope": "service:read",
         },
@@ -162,7 +187,7 @@ async def test_client_credentials_rejects_client_secret_post_when_disabled(
         "/oauth2/token",
         data={
             "grant_type": "client_credentials",
-            "client_id": "machine-client",
+            "client_id": str(deterministic_uuid("machine-client")),
             "client_secret": raw_secret,
             "scope": "service:read",
         },
@@ -179,7 +204,9 @@ async def test_client_credentials_rejects_wrong_secret(
 ) -> None:
     """Assert client credentials rejects bad client secrets."""
     await create_confidential_machine_client(app)
-    basic_payload = base64.b64encode(b"machine-client:wrong-secret").decode()
+    basic_payload = base64.b64encode(
+        f"{deterministic_uuid('machine-client')}:wrong-secret".encode()
+    ).decode()
 
     response = await client.post(
         "/oauth2/token",
@@ -201,7 +228,9 @@ async def test_client_credentials_rejects_invalid_scope(
 ) -> None:
     """Assert client credentials rejects scopes outside registration."""
     raw_secret = await create_confidential_machine_client(app)
-    basic_payload = base64.b64encode(f"machine-client:{raw_secret}".encode()).decode()
+    basic_payload = base64.b64encode(
+        f"{deterministic_uuid('machine-client')}:{raw_secret}".encode()
+    ).decode()
 
     response = await client.post(
         "/oauth2/token",
@@ -226,11 +255,13 @@ async def test_client_credentials_rejects_inactive_client(
     async with app.state.core_session_factory() as db_session:
         await db_session.execute(
             update(OAuth2ClientDB)
-            .where(OAuth2ClientDB.client_id == "machine-client")
+            .where(OAuth2ClientDB.client_id == deterministic_uuid("machine-client"))
             .values(is_active=False)
         )
         await db_session.commit()
-    basic_payload = base64.b64encode(f"machine-client:{raw_secret}".encode()).decode()
+    basic_payload = base64.b64encode(
+        f"{deterministic_uuid('machine-client')}:{raw_secret}".encode()
+    ).decode()
 
     response = await client.post(
         "/oauth2/token",
@@ -257,7 +288,7 @@ async def test_client_credentials_rejects_public_client(
         "/oauth2/token",
         data={
             "grant_type": "client_credentials",
-            "client_id": "public-machine-client",
+            "client_id": str(deterministic_uuid("public-machine-client")),
             "scope": "service:read",
         },
     )
@@ -275,7 +306,7 @@ async def test_client_credentials_rejects_client_without_grant(
     """Assert confidential clients need the client-credentials grant registered."""
     raw_secret = await create_confidential_authorization_code_client(app)
     basic_payload = base64.b64encode(
-        f"confidential-client:{raw_secret}".encode()
+        f"{deterministic_uuid('confidential-client')}:{raw_secret}".encode()
     ).decode()
 
     response = await client.post(
@@ -299,7 +330,9 @@ async def test_client_credentials_token_resolves_machine_principal(
     """Assert client-credentials tokens can authenticate as client principals."""
     add_oauth2_principal_routes(app)
     raw_secret = await create_confidential_machine_client(app)
-    basic_payload = base64.b64encode(f"machine-client:{raw_secret}".encode()).decode()
+    basic_payload = base64.b64encode(
+        f"{deterministic_uuid('machine-client')}:{raw_secret}".encode()
+    ).decode()
     token_response = await client.post(
         "/oauth2/token",
         data={
@@ -316,7 +349,7 @@ async def test_client_credentials_token_resolves_machine_principal(
 
     assert response.status_code == status.HTTP_200_OK
     assert response.json() == {
-        "client_id": "machine-client",
+        "client_id": str(deterministic_uuid("machine-client")),
         "user_id": None,
         "organization_id": None,
         "scopes": ["service:read"],
@@ -331,7 +364,9 @@ async def test_userinfo_rejects_client_credentials_principal(
 ) -> None:
     """Keep OIDC UserInfo restricted to user-backed bearer principals."""
     raw_secret = await create_confidential_machine_client(app)
-    basic_payload = base64.b64encode(f"machine-client:{raw_secret}".encode()).decode()
+    basic_payload = base64.b64encode(
+        f"{deterministic_uuid('machine-client')}:{raw_secret}".encode()
+    ).decode()
     token_response = await client.post(
         "/oauth2/token",
         data={
@@ -359,7 +394,9 @@ async def test_client_credentials_token_enforces_scopes(
     """Assert scope dependencies authorize machine clients by granted scope."""
     add_oauth2_principal_routes(app)
     raw_secret = await create_confidential_machine_client(app)
-    basic_payload = base64.b64encode(f"machine-client:{raw_secret}".encode()).decode()
+    basic_payload = base64.b64encode(
+        f"{deterministic_uuid('machine-client')}:{raw_secret}".encode()
+    ).decode()
     token_response = await client.post(
         "/oauth2/token",
         data={
@@ -380,7 +417,9 @@ async def test_client_credentials_token_enforces_scopes(
     )
 
     assert read_response.status_code == status.HTTP_200_OK
-    assert read_response.json()["client_id"] == "machine-client"
+    assert read_response.json()["client_id"] == str(
+        deterministic_uuid("machine-client")
+    )
     assert write_response.status_code == status.HTTP_403_FORBIDDEN
 
 
@@ -393,7 +432,9 @@ async def test_client_credentials_principal_rejects_inactive_client_after_issue(
     """Assert machine-principal resolution rechecks client activity."""
     add_oauth2_principal_routes(app)
     raw_secret = await create_confidential_machine_client(app)
-    basic_payload = base64.b64encode(f"machine-client:{raw_secret}".encode()).decode()
+    basic_payload = base64.b64encode(
+        f"{deterministic_uuid('machine-client')}:{raw_secret}".encode()
+    ).decode()
     token_response = await client.post(
         "/oauth2/token",
         data={
@@ -405,7 +446,7 @@ async def test_client_credentials_principal_rejects_inactive_client_after_issue(
     async with app.state.core_session_factory() as db_session:
         await db_session.execute(
             update(OAuth2ClientDB)
-            .where(OAuth2ClientDB.client_id == "machine-client")
+            .where(OAuth2ClientDB.client_id == deterministic_uuid("machine-client"))
             .values(is_active=False)
         )
         await db_session.commit()
@@ -427,7 +468,9 @@ async def test_client_credentials_principal_rejects_ended_session(
     """Assert machine-principal resolution requires a live OAuth2 session."""
     add_oauth2_principal_routes(app)
     raw_secret = await create_confidential_machine_client(app)
-    basic_payload = base64.b64encode(f"machine-client:{raw_secret}".encode()).decode()
+    basic_payload = base64.b64encode(
+        f"{deterministic_uuid('machine-client')}:{raw_secret}".encode()
+    ).decode()
     token_response = await client.post(
         "/oauth2/token",
         data={

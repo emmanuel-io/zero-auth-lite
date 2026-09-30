@@ -1,0 +1,18 @@
+{% extends "management/base.html" %}
+{% block title %}{{ heading }} · Zero Auth Lite{% endblock %}
+{% block content %}
+  <section class="panel form-panel danger-panel">
+    <p class="eyebrow">Confirmation</p>
+    <h1>{{ heading }}</h1>
+    <p class="muted">{{ message }}</p>
+    <form class="form-stack" method="post" action="{{ action }}" hx-post="{{ action }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label class="checkbox">
+        <input type="checkbox" name="confirm" value="true" required> I understand this action cannot be undone.</label>
+      <div class="form-actions">
+        <a class="button button--secondary" href="{{ cancel_url }}">Cancel</a>
+        <button class="button--danger" type="submit">{{ submit_label }}</button>
+      </div>
+    </form>
+  </section>
+{% endblock %}

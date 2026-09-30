@@ -6,16 +6,23 @@ separate prevents a valid identity from being mistaken for unlimited access.
 ## Authentication: Who Are You?
 
 Authentication establishes a principal. A browser session authenticates a
-user through an opaque cookie backed by server-side state. A bearer access
-token authenticates the user or client represented by that token. OAuth2
-client authentication establishes the client, not a browser user.
+user through an opaque cookie backed by server-side state. The resulting
+principal records the `browser_session` authentication mechanism. An HTTP
+Bearer credential can carry an OAuth2 access token; after token and persisted
+session validation, the resulting user or client principal records the
+`oauth2_bearer` mechanism. Bearer is the credential transport, while OAuth2 is
+the protocol that issued and governs the access token. OAuth2 client
+authentication establishes the client, not a browser user.
 
-Both transports resolve to explicit canonical principal contexts. Browser
-sessions, OAuth2 users, and OAuth2 clients each keep their own immutable
-context type behind small shared protocols. Session and OAuth2 code produce the
-authentication facts; authorization dependencies then evaluate those facts
-without mixing client-only and user-only fields. The shared contexts and
-transport-composing dependencies live in `app/security/`; each authentication
+Both mechanisms resolve to explicit canonical principal contexts. Browser
+sessions, OAuth2 users, and OAuth2 clients each keep their own immutable context
+type behind small shared protocols. The shared protocol exposes identity and
+the authentication mechanism, but no session credential. Only a browser
+principal carries its opaque `raw_session_id`; only OAuth2 principals carry an
+internal `oauth2_session_id`. Session and OAuth2 code produce these
+authentication facts; authorization dependencies then evaluate them without
+mixing browser-only, client-only, and user-only fields. The shared contexts and
+mechanism-composing dependencies live in `app/security/`; each authentication
 feature remains responsible for resolving its own session or token state.
 
 Passwords, session cookies, authorization codes, access tokens, refresh
@@ -35,7 +42,7 @@ principal against the requested action and resource.
 
 An organization administrator operates inside one organization. An operator is
 a global control-plane role and may act across organizations through the
-dedicated `/api/v1/admin/*` surface.
+dedicated `/api/v1/server/*` surface.
 
 A scope is not automatically an application permission. A resource server must
 map token scopes and principal context to an explicit access decision. In the
@@ -51,8 +58,9 @@ Current-organization administration intentionally uses the coarse
 `organization:read` and `organization:write` scopes across organization
 metadata, users, and OAuth2 sessions. Those scopes constrain an
 organization-admin token; they do not confer the organization-admin role. The
-server-operator API keeps the resource-specific `organizations:*`, `users:*`,
-and `oauth2_clients:*` scopes for global control-plane actions.
+server API for server operators keeps the resource-specific `organizations:*`,
+`users:*`, `sessions:write`, and `oauth2_clients:*` scopes for server-wide
+control-plane actions.
 
 ## Where Decisions Live
 

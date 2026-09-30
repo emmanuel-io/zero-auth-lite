@@ -5,6 +5,7 @@ from typing import Self
 import pytest
 from app.settings.root import Settings
 
+from app.db import worker as db_worker
 from app.oauth2 import cleanup_worker
 
 
@@ -59,22 +60,22 @@ async def test_cleanup_process_runs_once(
     def fake_session_factory(_engine: object) -> type[FakeSessionContext]:
         return FakeSessionContext
 
-    async def fake_cleanup(**kwargs: object) -> object:
-        cleanup_calls.append(kwargs["db_session"])
+    async def fake_cleanup(session_factory: object, **_kwargs: object) -> object:
+        cleanup_calls.append(session_factory)
         return object()
 
-    monkeypatch.setattr(cleanup_worker, "create_engine", fake_create_engine)
+    monkeypatch.setattr(db_worker, "create_engine", fake_create_engine)
     monkeypatch.setattr(
-        cleanup_worker,
+        db_worker,
         "ensure_database_is_migrated",
         fake_migration_check,
     )
     monkeypatch.setattr(
-        cleanup_worker,
+        db_worker,
         "create_session_factory",
         fake_session_factory,
     )
-    monkeypatch.setattr(cleanup_worker, "run_oauth2_cleanup", fake_cleanup)
+    monkeypatch.setattr(cleanup_worker, "drain_oauth2_cleanup", fake_cleanup)
 
     await cleanup_worker.run_cleanup_process(
         Settings(),
@@ -83,5 +84,5 @@ async def test_cleanup_process_runs_once(
 
     assert migration_checks == [engine]
     assert len(cleanup_calls) == 1
-    assert isinstance(cleanup_calls[0], FakeSessionContext)
+    assert cleanup_calls[0] is FakeSessionContext
     assert engine.disposed is True

@@ -1,22 +1,21 @@
-# ruff: noqa: PLR0913
 """Browser authorization requests for the authorization code flow."""
 
 from dataclasses import dataclass
 from datetime import datetime, UTC
 from logging import getLogger
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import urlencode
 
 from sqlalchemy import insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.oauth2_authorization_code import OAuth2AuthorizationCodeDB
 from app.db.models.oauth2_client import OAuth2ClientDB
-from app.identity.public_ids import format_organization_id, format_user_id
+from app.identifiers import parse_uuid4
 from app.oauth2.authorization.code import (
     create_authorization_code,
     hash_authorization_code,
 )
-from app.oauth2.authorization.code_dtos import (
+from app.oauth2.authorization.dtos import (
     AuthorizationCodeCreateDTO,
 )
 from app.oauth2.authorization.result import (
@@ -29,29 +28,27 @@ from app.oauth2.clients.user_organization_authorization import (
     ensure_client_allows_user_organization,
     OAuth2ClientNotAllowedForUserOrganizationError,
 )
-from app.oauth2.settings import OAuth2GrantType, OAuth2Settings
+from app.oauth2.error_codes import OAuth2ErrorCode
+from app.oauth2.grants.types import OAuth2GrantType
+from app.oauth2.settings import OAuth2Settings
 from app.oauth2.validation import (
     client_allows_grant,
-    ERR_INVALID_CLIENT,
-    ERR_INVALID_REQUEST,
-    ERR_UNAUTHORIZED_CLIENT,
-    ERR_UNSUPPORTED_RESPONSE_TYPE,
     normalize_scope,
+    reject_redirect_uri_fragment,
     validate_oidc_scope_enabled,
     validate_pkce_challenge,
     validate_pkce_method,
-    validate_redirect_uri,
     validate_requested_scope,
 )
-from app.security.dtos import InteractiveUserPrincipalContext
+from app.security.principals import InteractiveUserPrincipalContext
 
 
 logger = getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
-class AuthorizationRequest:
-    """Validated OAuth2 authorization request payload."""
+class AuthorizationRequestInput:
+    """Client-controlled OAuth2 authorization input awaiting validation."""
 
     response_type: str
     client_id: str
@@ -67,21 +64,15 @@ class AuthorizationRequest:
 class ValidatedAuthorizationRequest:
     """Authorization request state trusted before browser interaction."""
 
-    request: AuthorizationRequest
+    request: AuthorizationRequestInput
     client: OAuth2ClientReadDTO
     requested_scope: str
-
-
-def validate_redirect_uri_text(redirect_uri: str) -> None:
-    """Reject redirect URIs carrying fragments."""
-    if urlsplit(redirect_uri).fragment:
-        raise ValueError(ERR_INVALID_REQUEST)
 
 
 def _authorization_error_redirect(
     *,
     redirect_uri: str,
-    error: str,
+    error: OAuth2ErrorCode,
     state: str | None,
 ) -> AuthorizationRedirect:
     """Build a redirect error only after the callback URI is trusted."""
@@ -107,15 +98,18 @@ class AuthorizationRequestService:
 
     async def validate_request(
         self,
-        request: AuthorizationRequest,
+        request: AuthorizationRequestInput,
     ) -> ValidatedAuthorizationRequest | AuthorizationRedirect:
         """Validate client-controlled authorization input before interaction."""
         redirect_uri = request.redirect_uri
-        validate_redirect_uri_text(redirect_uri)
-        validate_redirect_uri(redirect_uri)
+        reject_redirect_uri_fragment(redirect_uri)
 
+        try:
+            parsed_client_id = parse_uuid4(request.client_id)
+        except ValueError as exc:
+            raise ValueError(OAuth2ErrorCode.INVALID_CLIENT) from exc
         client_row = await self.db_session.scalar(
-            select(OAuth2ClientDB).where(OAuth2ClientDB.client_id == request.client_id)
+            select(OAuth2ClientDB).where(OAuth2ClientDB.client_id == parsed_client_id)
         )
         client = (
             OAuth2ClientReadDTO.model_validate(client_row)
@@ -123,25 +117,25 @@ class AuthorizationRequestService:
             else None
         )
         if client is None or not client.is_active:
-            raise ValueError(ERR_INVALID_CLIENT)
+            raise ValueError(OAuth2ErrorCode.INVALID_CLIENT)
         if redirect_uri not in (client.redirect_uris or []):
-            raise ValueError(ERR_INVALID_REQUEST)
-        if not self.settings.is_grant_enabled(OAuth2GrantType.authorization_code):
+            raise ValueError(OAuth2ErrorCode.INVALID_REQUEST)
+        if not self.settings.is_grant_enabled(OAuth2GrantType.AUTHORIZATION_CODE):
             return _authorization_error_redirect(
                 redirect_uri=redirect_uri,
-                error=ERR_UNSUPPORTED_RESPONSE_TYPE,
+                error=OAuth2ErrorCode.UNSUPPORTED_RESPONSE_TYPE,
                 state=request.state,
             )
         if request.response_type != "code":
             return _authorization_error_redirect(
                 redirect_uri=redirect_uri,
-                error=ERR_UNSUPPORTED_RESPONSE_TYPE,
+                error=OAuth2ErrorCode.UNSUPPORTED_RESPONSE_TYPE,
                 state=request.state,
             )
-        if not client_allows_grant(client, OAuth2GrantType.authorization_code):
+        if not client_allows_grant(client, OAuth2GrantType.AUTHORIZATION_CODE):
             return _authorization_error_redirect(
                 redirect_uri=redirect_uri,
-                error=ERR_UNAUTHORIZED_CLIENT,
+                error=OAuth2ErrorCode.UNAUTHORIZED_CLIENT,
                 state=request.state,
             )
         try:
@@ -150,7 +144,7 @@ class AuthorizationRequestService:
         except ValueError:
             return _authorization_error_redirect(
                 redirect_uri=redirect_uri,
-                error=ERR_INVALID_REQUEST,
+                error=OAuth2ErrorCode.INVALID_REQUEST,
                 state=request.state,
             )
         requested_scope = normalize_scope(request.scope)
@@ -166,7 +160,7 @@ class AuthorizationRequestService:
         except ValueError:
             return _authorization_error_redirect(
                 redirect_uri=redirect_uri,
-                error="invalid_scope",
+                error=OAuth2ErrorCode.INVALID_SCOPE,
                 state=request.state,
             )
         return ValidatedAuthorizationRequest(
@@ -196,14 +190,14 @@ class AuthorizationRequestService:
         except OAuth2ClientNotAllowedForUserOrganizationError:
             return _authorization_error_redirect(
                 redirect_uri=redirect_uri,
-                error="access_denied",
+                error=OAuth2ErrorCode.ACCESS_DENIED,
                 state=request.state,
             )
         if client.requires_consent:
             if consent == "deny":
                 return _authorization_error_redirect(
                     redirect_uri=redirect_uri,
-                    error="access_denied",
+                    error=OAuth2ErrorCode.ACCESS_DENIED,
                     state=request.state,
                 )
             if consent != "approve":
@@ -220,7 +214,7 @@ class AuthorizationRequestService:
         )
         data = AuthorizationCodeCreateDTO(
             code_hash=code_hash,
-            client_id=request.client_id,
+            client_id=client.client_id,
             redirect_uri=redirect_uri,
             scope=requested_scope,
             nonce=request.nonce,
@@ -240,11 +234,9 @@ class AuthorizationRequestService:
                 "event=oauth2_authorization_code outcome=attempted client_id=%s "
                 "subject_id=%s organization_id=%s scope=%s"
             ),
-            request.client_id,
-            format_user_id(user_ctx.user_public_id)
-            if user_ctx.user_public_id
-            else "unknown",
-            format_organization_id(user_ctx.organization_public_id)
+            client.client_id,
+            str(user_ctx.user_public_id) if user_ctx.user_public_id else "unknown",
+            str(user_ctx.organization_public_id)
             if user_ctx.organization_public_id
             else "unknown",
             requested_scope,
@@ -263,11 +255,12 @@ class AuthorizationRequestService:
         request = validated.request
         return _authorization_error_redirect(
             redirect_uri=request.redirect_uri,
-            error="access_denied",
+            error=OAuth2ErrorCode.ACCESS_DENIED,
             state=request.state,
         )
 
-    async def authorize_code(
+    # Keep the OAuth2 request fields visible throughout authorization.
+    async def authorize_code(  # noqa: PLR0913
         self,
         *,
         user_ctx: InteractiveUserPrincipalContext,
@@ -283,27 +276,12 @@ class AuthorizationRequestService:
     ) -> AuthorizationResult:
         """Authorize an OAuth2 client and issue an authorization code.
 
-        Args:
-            user_ctx: Authenticated browser user context.
-            response_type (str): OAuth2 response type.
-            client_id (str): OAuth2 client identifier.
-            redirect_uri (str | None): Requested redirect URI.
-            scope (str | None): Requested scope string.
-            state (str | None): Client state value.
-            code_challenge (str | None): PKCE S256 challenge.
-            code_challenge_method (str | None): PKCE challenge method.
-            nonce (str | None): Optional OIDC nonce bound into the auth code.
-            consent (str | None): Optional user consent decision.
-
-        Returns:
-            AuthorizationResult: Consent page data or client callback redirect.
-
         Raises:
             ValueError: If the request is invalid.
         """
         if redirect_uri is None or code_challenge is None:
-            raise ValueError(ERR_INVALID_REQUEST)
-        request = AuthorizationRequest(
+            raise ValueError(OAuth2ErrorCode.INVALID_REQUEST)
+        request = AuthorizationRequestInput(
             response_type=response_type,
             client_id=client_id,
             redirect_uri=redirect_uri,

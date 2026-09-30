@@ -13,7 +13,7 @@ def create_id_token(  # noqa: PLR0913
     *,
     subject: str,
     audience: str,
-    jwt_issuer: str,
+    issuer: str,
     lifetime_seconds: int,
     authenticated_at: datetime,
     key: ed25519.Ed25519PrivateKey | str,
@@ -35,7 +35,7 @@ def create_id_token(  # noqa: PLR0913
         header["kid"] = key_id
 
     claims: dict[str, object] = {
-        "iss": jwt_issuer,
+        "iss": issuer,
         "sub": subject,
         "aud": audience,
         "exp": int((now + timedelta(seconds=lifetime_seconds)).timestamp()),

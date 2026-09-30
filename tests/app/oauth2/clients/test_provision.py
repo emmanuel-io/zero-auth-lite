@@ -12,7 +12,6 @@ from app.db.models.oauth2_client import (
     OAuth2ClientMachineOrganizationDB,
 )
 from app.db.models.organization import OrganizationDB
-from app.identity.public_ids import format_organization_id
 from app.oauth2.clients.access import OAuth2ClientMachineOrganizationAccess
 from app.oauth2.clients.dtos import OAuth2ClientRegistrationDTO
 from app.oauth2.clients.provision import (
@@ -28,6 +27,10 @@ from fastapi import FastAPI, status
 from sqlalchemy import insert, select
 
 from app.oauth2.clients import provision
+from tests.identifiers import (
+    deterministic_uuid,
+    format_public_id as format_organization_id,
+)
 
 
 pytestmark = pytest.mark.integration
@@ -41,6 +44,7 @@ async def test_provision_persists_confidential_client_and_selected_organization(
     client: httpx.AsyncClient,
 ) -> None:
     """Persist only the generated secret hash and explicit organization assignment."""
+
     async with app.state.core_session_factory() as db_session:
         organization = (
             await db_session.execute(
@@ -85,7 +89,7 @@ async def test_provision_persists_confidential_client_and_selected_organization(
     token_response = await client.post(
         "/oauth2/token",
         data={"grant_type": "client_credentials", "scope": "organization:read"},
-        auth=(prepared.client_id, prepared.client_secret),
+        auth=(str(prepared.client_id), prepared.client_secret),
     )
     assert token_response.status_code == status.HTTP_200_OK
     assert token_response.json()["access_token"]
@@ -95,10 +99,13 @@ async def test_provision_persists_confidential_client_and_selected_organization(
 @pytest.mark.parametrize(
     ("mode", "organization_ids"),
     [
-        (OAuth2ClientMachineOrganizationAccess.NONE, ["org_0000000000000"]),
+        (OAuth2ClientMachineOrganizationAccess.NONE, [str(deterministic_uuid(1))]),
         (OAuth2ClientMachineOrganizationAccess.SINGLE, []),
         (OAuth2ClientMachineOrganizationAccess.SELECTED, []),
-        (OAuth2ClientMachineOrganizationAccess.UNRESTRICTED, ["org_0000000000000"]),
+        (
+            OAuth2ClientMachineOrganizationAccess.UNRESTRICTED,
+            [str(deterministic_uuid(1))],
+        ),
     ],
 )
 async def test_provision_rejects_incoherent_assignment_shapes(
@@ -134,7 +141,7 @@ def test_provision_cli_serializes_work_and_prints_secret_once(
             is_confidential=True,
             requires_consent=False,
         ),
-        client_id="client-id",
+        client_id=deterministic_uuid("client-id"),
         client_secret=TEST_CLIENT_SECRET,
         client_secret_hash=TEST_CLIENT_SECRET_HASH,
         machine_organization_access=OAuth2ClientMachineOrganizationAccess.NONE,
@@ -162,7 +169,7 @@ def test_provision_cli_serializes_work_and_prints_secret_once(
 
     output = json.loads(capsys.readouterr().out)
     assert output == {
-        "client_id": "client-id",
+        "client_id": str(prepared.client_id),
         "client_secret": TEST_CLIENT_SECRET,
     }
     assert observed_lock == [(tmp_path / "bootstrap", "oauth2-client-provision.lock")]

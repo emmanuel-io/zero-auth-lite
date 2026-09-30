@@ -14,4 +14,5 @@ class UserSpecs:
     FIRST_NAME_LENGTH_MAX: Final[int] = 64
     LAST_NAME_LENGTH_MAX: Final[int] = 64
     EMAIL_LENGTH_MAX: Final[int] = EMAIL_ADDRESS_LENGTH_MAX
+    SEARCH_QUERY_LENGTH_MAX: Final[int] = 256
     GENERATED_PASSWORD_BYTES: Final[int] = 32

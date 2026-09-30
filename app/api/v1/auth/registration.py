@@ -2,17 +2,14 @@
 
 from fastapi import APIRouter, status
 
-from app.api.v1.auth.responses import REGISTRATION_ERROR_RESPONSES
+from app.api.v1.auth.openapi_responses import REGISTRATION_ERROR_RESPONSES
 from app.api.v1.auth.schemas import (
     RegisterRequest,
     RegistrationResponse,
 )
-from app.db.dependencies import DbSessionDep
-from app.events.dependencies import EventPublisherDep
+from app.identity.dependencies import RegistrationServiceDep
 from app.identity.dtos import RegistrationCreateDTO
-from app.identity.registration import RegistrationService
 from app.openapi_tags import AUTHENTICATION_V1_TAG
-from app.password.dependencies import PasswordHasherDep
 
 
 router = APIRouter(tags=[AUTHENTICATION_V1_TAG])
@@ -26,16 +23,9 @@ router = APIRouter(tags=[AUTHENTICATION_V1_TAG])
 )
 async def register_user(
     payload: RegisterRequest,
-    db_session: DbSessionDep,
-    event_publisher: EventPublisherDep,
-    password_hasher: PasswordHasherDep,
+    registration_service: RegistrationServiceDep,
 ) -> RegistrationResponse:
     """Register an organization and its initial user through the identity lifecycle."""
-    service = RegistrationService(
-        db_session=db_session,
-        event_publisher=event_publisher,
-        password_hasher=password_hasher,
-    )
     registration = RegistrationCreateDTO(
         email=payload.email,
         password=payload.password,
@@ -44,12 +34,12 @@ async def register_user(
         last_name=payload.last_name,
     )
 
-    result = await service.register(
+    result = await registration_service.register(
         registration=registration,
     )
     return RegistrationResponse(
-        id=result.id,
-        organization_id=result.organization_id,
+        public_id=result.public_id,
+        organization_public_id=result.organization_public_id,
         email=result.email,
         first_name=result.first_name,
         last_name=result.last_name,

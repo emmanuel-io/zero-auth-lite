@@ -1,5 +1,6 @@
 """Helpers for the canonical server's relational schema migrations."""
 
+from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -16,6 +17,7 @@ if TYPE_CHECKING:
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
+@cache
 def _expected_migration_heads() -> frozenset[str]:
     """Return the Alembic heads shipped with this server checkout."""
     config = Config(PROJECT_ROOT / "alembic.ini")

@@ -1,1 +1,1 @@
-"""Identity user persistence and service modules."""
+"""User commands, criteria, DTOs, email ownership, and validated value types."""

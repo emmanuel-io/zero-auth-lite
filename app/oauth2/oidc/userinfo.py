@@ -2,13 +2,15 @@
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.identity.public_ids import format_user_id
-from app.oauth2.errors import OAuth2SessionInvalidError, OIDCOpenIDScopeRequiredError
+from app.oauth2.errors import (
+    OAuth2TokenSessionInvalidError,
+    OIDCOpenIDScopeRequiredError,
+)
 from app.oauth2.oidc.schemas import UserInfoResponse
 from app.oauth2.settings import OAuth2Settings
 from app.oauth2.user_identity import load_eligible_oauth2_user_identity
 from app.oauth2.validation import user_display_name
-from app.security.dtos import OAuth2UserPrincipalContext
+from app.security.principals import OAuth2UserPrincipalContext
 
 
 class OIDCUserInfoService:
@@ -31,7 +33,7 @@ class OIDCUserInfoService:
     ) -> UserInfoResponse:
         """Return OIDC userinfo for a validated user principal."""
         if not self.settings.oidc_enabled:
-            raise OAuth2SessionInvalidError
+            raise OAuth2TokenSessionInvalidError
         if "openid" not in principal_ctx.scopes:
             raise OIDCOpenIDScopeRequiredError
         identity = await load_eligible_oauth2_user_identity(
@@ -40,10 +42,10 @@ class OIDCUserInfoService:
             organization_id=principal_ctx.organization_id,
         )
         if identity is None:
-            raise OAuth2SessionInvalidError
+            raise OAuth2TokenSessionInvalidError
         user = identity.user
 
-        response: UserInfoResponse = {"sub": format_user_id(user.public_id)}
+        response: UserInfoResponse = {"sub": user.public_id}
         if "email" in principal_ctx.scopes:
             response["email"] = user.email
             response["email_verified"] = user.email_verified

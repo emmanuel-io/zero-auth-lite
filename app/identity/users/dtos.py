@@ -2,22 +2,22 @@
 
 from datetime import datetime
 from typing import Protocol
+from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.time import as_utc_aware
 from app.identity.organizations.dtos import OrganizationSelfReadDTO
-from app.identity.users.enums import OrganizationUserRole
+from app.identity.users.enums import OrganizationMembershipRole
 from app.identity.users.types import UserEmail, UserFirstName, UserLastName
 from app.password.validation import PasswordInput, StrongPassword
-from app.public_ids import PublicId
 
 
 class UserReadSourceProtocol(Protocol):
     """Structural source for building user read DTOs."""
 
     @property
-    def public_id(self) -> PublicId | int:
+    def public_id(self) -> UUID:
         """Return the stable public user identifier."""
         ...
 
@@ -55,19 +55,19 @@ class OrganizationUserCreateDTO(BaseModel):
     first_name: UserFirstName = ""
     last_name: UserLastName = ""
     is_active: bool = True
-    role: OrganizationUserRole = OrganizationUserRole.MEMBER
+    role: OrganizationMembershipRole = OrganizationMembershipRole.MEMBER
 
 
-class OperatorUserCreateDTO(BaseModel):
-    """Server-operator invitation data."""
+class ServerUserCreateDTO(BaseModel):
+    """Server-wide user invitation data."""
 
     model_config = ConfigDict(extra="forbid")
 
     email: UserEmail
-    organization_id: PublicId
+    organization_id: UUID
     first_name: UserFirstName = ""
     last_name: UserLastName = ""
-    role: OrganizationUserRole = OrganizationUserRole.MEMBER
+    role: OrganizationMembershipRole = OrganizationMembershipRole.MEMBER
     is_operator: bool = False
 
 
@@ -80,7 +80,7 @@ class OrganizationUserPatchDTO(BaseModel):
     first_name: UserFirstName | None = None
     last_name: UserLastName | None = None
     is_active: bool | None = None
-    role: OrganizationUserRole | None = None
+    role: OrganizationMembershipRole | None = None
 
 
 class OrganizationUserReplaceDTO(BaseModel):
@@ -92,28 +92,28 @@ class OrganizationUserReplaceDTO(BaseModel):
     first_name: UserFirstName
     last_name: UserLastName
     is_active: bool
-    role: OrganizationUserRole
+    role: OrganizationMembershipRole
 
 
-class OperatorUserPatchDTO(OrganizationUserPatchDTO):
-    """Server-operator user partial update data."""
+class ServerUserPatchDTO(OrganizationUserPatchDTO):
+    """Server-wide user partial update data."""
 
-    organization_id: PublicId | None = None
+    organization_id: UUID | None = None
     is_operator: bool | None = None
     email_verified: bool | None = None
 
 
-class OperatorUserReplaceDTO(BaseModel):
-    """Server-operator full replacement data."""
+class ServerUserReplaceDTO(BaseModel):
+    """Server-wide user replacement data."""
 
     model_config = ConfigDict(extra="forbid")
 
-    organization_id: PublicId
+    organization_id: UUID
     email: UserEmail
     first_name: UserFirstName
     last_name: UserLastName
     is_active: bool
-    role: OrganizationUserRole
+    role: OrganizationMembershipRole
     is_operator: bool
     email_verified: bool
 
@@ -138,7 +138,7 @@ class UserSelfReadDTO(BaseModel):
     first_name: UserFirstName
     last_name: UserLastName
     is_active: bool
-    role: OrganizationUserRole
+    role: OrganizationMembershipRole
     email_verified: bool
     organization: OrganizationSelfReadDTO
     created_at: datetime
@@ -154,22 +154,29 @@ class UserPasswordChangeDTO(BaseModel):
     new_password: StrongPassword
 
 
+class UserSessionTargetDTO(BaseModel):
+    """Internal user identity required for session administration."""
+
+    internal_user_id: int
+    email: UserEmail
+
+
 class UserReadDTO(BaseModel):
     """Read-only user data."""
 
     model_config = ConfigDict(from_attributes=True)
 
-    public_id: PublicId
+    public_id: UUID
 
     email: UserEmail
     pending_email: UserEmail | None = None
     first_name: UserFirstName
     last_name: UserLastName
     is_active: bool
-    role: OrganizationUserRole
+    role: OrganizationMembershipRole
     is_operator: bool = False
     email_verified: bool = False
-    organization_id: PublicId | None = None
+    organization_public_id: UUID
     created_at: datetime
     updated_at: datetime
 
@@ -179,40 +186,37 @@ class OrganizationUserReadDTO(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-    public_id: PublicId
+    public_id: UUID
 
     email: UserEmail
     pending_email: UserEmail | None = None
     first_name: UserFirstName
     last_name: UserLastName
     is_active: bool
-    role: OrganizationUserRole
+    role: OrganizationMembershipRole
     email_verified: bool = False
+    session_management_allowed: bool = Field(default=True, exclude=True)
     created_at: datetime
     updated_at: datetime
 
 
 def to_user_read_dto(
     user: UserReadSourceProtocol,
-    organization_public_id: int | None,
-    role: OrganizationUserRole,
+    organization_public_id: UUID,
+    role: OrganizationMembershipRole,
 ) -> UserReadDTO:
     """Build a user read DTO with a public organization identifier."""
     return UserReadDTO(
         public_id=user.public_id,
         email=user.email,
-        pending_email=getattr(user, "pending_email", None),
+        pending_email=user.pending_email,
         first_name=user.first_name,
         last_name=user.last_name,
         is_active=user.is_active,
         role=role,
         is_operator=user.is_operator,
         email_verified=user.email_verified,
-        organization_id=(
-            PublicId(organization_public_id)
-            if organization_public_id is not None
-            else None
-        ),
+        organization_public_id=organization_public_id,
         created_at=as_utc_aware(user.created_at),
         updated_at=as_utc_aware(user.updated_at),
     )
@@ -220,18 +224,19 @@ def to_user_read_dto(
 
 def to_organization_user_read_dto(
     user: UserReadSourceProtocol,
-    role: OrganizationUserRole,
+    role: OrganizationMembershipRole,
 ) -> OrganizationUserReadDTO:
     """Build an organization-scoped read DTO without global-only fields."""
     return OrganizationUserReadDTO(
         public_id=user.public_id,
         email=user.email,
-        pending_email=getattr(user, "pending_email", None),
+        pending_email=user.pending_email,
         first_name=user.first_name,
         last_name=user.last_name,
         is_active=user.is_active,
         role=role,
         email_verified=user.email_verified,
+        session_management_allowed=not user.is_operator,
         created_at=as_utc_aware(user.created_at),
         updated_at=as_utc_aware(user.updated_at),
     )
@@ -240,12 +245,12 @@ def to_organization_user_read_dto(
 def to_user_self_read_dto(
     user: UserReadSourceProtocol,
     organization: OrganizationSelfReadDTO,
-    role: OrganizationUserRole,
+    role: OrganizationMembershipRole,
 ) -> UserSelfReadDTO:
     """Build the dedicated current-user profile response."""
     return UserSelfReadDTO(
         email=user.email,
-        pending_email=getattr(user, "pending_email", None),
+        pending_email=user.pending_email,
         first_name=user.first_name,
         last_name=user.last_name,
         is_active=user.is_active,

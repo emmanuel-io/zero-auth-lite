@@ -10,7 +10,7 @@ pytestmark = pytest.mark.unit
 
 APP = Path(__file__).parents[2] / "app"
 CANONICAL_PRINCIPAL_CLASSES = {
-    "AuthMethod",
+    "AuthenticationMechanism",
     "PrincipalContext",
     "UserPrincipalContext",
     "BrowserUserPrincipalContext",
@@ -46,7 +46,7 @@ def test_authentication_principal_has_one_canonical_definition() -> None:
             if isinstance(node, ast.ClassDef) and node.name in definitions:
                 definitions[node.name].append(module_path)
 
-    canonical_module = APP / "security" / "dtos.py"
+    canonical_module = APP / "security" / "principals.py"
     assert definitions == {
         class_name: [canonical_module] for class_name in CANONICAL_PRINCIPAL_CLASSES
     }
@@ -117,3 +117,17 @@ def test_core_does_not_compose_authentication_features() -> None:
             for module in imported_modules
             for prefix in feature_prefixes
         ), module_path
+
+
+def test_application_openapi_composes_owning_policies() -> None:
+    """Keep cross-feature OpenAPI composition at the application boundary."""
+    imported_modules = _imported_modules(APP / "openapi.py")
+
+    assert {
+        "app.core.openapi",
+        "app.oauth2.openapi",
+        "app.security.openapi",
+    } <= imported_modules
+    assert "app.security.openapi" not in _imported_modules(
+        APP / "oauth2" / "openapi.py"
+    )

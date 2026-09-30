@@ -1,4 +1,4 @@
-"""Tests for transactional mail service behavior."""
+"""Tests for authentication mail delivery behavior."""
 
 from pathlib import Path
 
@@ -61,6 +61,37 @@ async def test_send_template_renders_html_and_plain_text_fallback(
 
 
 @pytest.mark.asyncio
+async def test_send_template_renders_explicit_plain_text_template(
+    tmp_path: Path,
+) -> None:
+    """Prefer an explicit text template so links remain actionable."""
+    html_template = tmp_path / "hello.html"
+    text_template = tmp_path / "hello.txt"
+    html_template.write_text('<a href="{{ url }}">Open workflow</a>', encoding="utf-8")
+    text_template.write_text("Open workflow: {{ url }}", encoding="utf-8")
+    provider = FakeMailProvider()
+    service = MailService(
+        provider=provider,
+        renderer=EmailTemplateRenderer(tmp_path),
+        settings=MailSettings(),
+    )
+
+    await service.send_template(
+        TemplateEmail(
+            subject="Workflow",
+            to=[EmailAddress(email="user@example.com")],
+            template_name="hello.html",
+            text_template_name="hello.txt",
+            context={"url": "https://example.test/workflow"},
+        )
+    )
+
+    assert provider.sent[0].text_body == (
+        "Open workflow: https://example.test/workflow"
+    )
+
+
+@pytest.mark.asyncio
 async def test_send_message_skips_delivery_when_disabled() -> None:
     """Assert disabled mail settings suppress provider delivery."""
     provider = FakeMailProvider()
@@ -75,6 +106,27 @@ async def test_send_message_skips_delivery_when_disabled() -> None:
             subject="Quiet",
             to=[EmailAddress(email="user@example.com")],
             text_body="No delivery",
+        )
+    )
+
+    assert provider.sent == []
+
+
+@pytest.mark.asyncio
+async def test_send_template_skips_rendering_when_disabled(tmp_path: Path) -> None:
+    """Assert disabled mail settings suppress template rendering and delivery."""
+    provider = FakeMailProvider()
+    service = MailService(
+        provider=provider,
+        renderer=EmailTemplateRenderer(tmp_path),
+        settings=MailSettings(enabled=False),
+    )
+
+    await service.send_template(
+        TemplateEmail(
+            subject="Quiet",
+            to=[EmailAddress(email="user@example.com")],
+            template_name="missing.html",
         )
     )
 

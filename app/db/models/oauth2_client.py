@@ -1,6 +1,8 @@
 """SQLAlchemy models for OAuth2 clients and organization assignments."""
 
-from sqlalchemy import CheckConstraint, ForeignKey, Integer, JSON, String
+from uuid import UUID
+
+from sqlalchemy import CheckConstraint, ForeignKey, Integer, JSON, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -13,13 +15,29 @@ class OAuth2ClientDB(Base, CreatedAtMixin, UpdatedAtMixin):
     """Application-owned global OAuth2 registered client table."""
 
     __tablename__ = "oauth2_client"
-    __table_args__ = (CheckConstraint("length(trim(name)) > 0", name="name_not_blank"),)
+    __table_args__ = (
+        CheckConstraint("length(trim(name)) > 0", name="name_not_blank"),
+        CheckConstraint(
+            "user_organization_access IN ('unrestricted', 'single', 'selected')",
+            name="user_organization_access_valid",
+        ),
+        CheckConstraint(
+            "machine_organization_access IN "
+            "('none', 'single', 'selected', 'unrestricted')",
+            name="machine_organization_access_valid",
+        ),
+        CheckConstraint(
+            "(is_confidential = 1 AND client_secret IS NOT NULL) OR "
+            "(is_confidential = 0 AND client_secret IS NULL)",
+            name="confidential_secret_valid",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(
         Integer, primary_key=True, autoincrement=True, nullable=False
     )
-    client_id: Mapped[str] = mapped_column(
-        String(OAuth2Specs.CLIENT_ID_LENGTH_MAX), unique=True, nullable=False
+    client_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), unique=True, nullable=False
     )
     client_secret: Mapped[str | None] = mapped_column(
         String(OAuth2Specs.CLIENT_SECRET_HASH_LENGTH_MAX), nullable=True

@@ -22,8 +22,9 @@ authorization code. You can inspect the management contract at
 
 In the Network panel, select the `POST /login` response and copy its
 `X-CSRF-Token` response header. The built-in login response exposes the token
-bound to the new session; the JSON-only `/api/v1/sessions/csrf` initializer is
-not mounted in this mode.
+bound to the new session. `GET /api/v1/sessions/csrf` is also mounted in this
+profile, but calling it immediately after the built-in login is unnecessary
+because the response already exposes the live session's CSRF token.
 
 In the developer console of that same browser tab, paste the copied value into
 `csrfToken`, then run this request. The browser sends its `HttpOnly` session
@@ -31,7 +32,7 @@ cookie automatically:
 
 ```javascript
 const csrfToken = "paste-the-X-CSRF-Token-response-header-here";
-const clientResponse = await fetch("/api/v1/admin/oauth2/clients", {
+const clientResponse = await fetch("/api/v1/server/oauth2/clients", {
   method: "POST",
   headers: {
     "Content-Type": "application/json",

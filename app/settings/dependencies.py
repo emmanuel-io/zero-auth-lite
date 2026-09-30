@@ -8,11 +8,10 @@ from app.settings.state import get_settings_snapshot
 
 
 if TYPE_CHECKING:
-    from app.auth_tokens.settings import AuthTokenSettings
-    from app.browser_sessions.settings import CSRFSettings, SessionSettings
-    from app.mail.settings import MailSettings
+    from app.browser_sessions.settings import BrowserSessionSettings, CSRFSettings
     from app.oauth2.settings import OAuth2Settings
     from app.settings.root import Settings
+    from app.workflow_tokens.settings import WorkflowTokenSettings
 
 
 def get_settings(
@@ -25,21 +24,23 @@ def get_settings(
 SettingsDep = Annotated["Settings", Depends(get_settings)]
 
 
-def get_session_settings(
+def get_browser_session_settings(
     settings: SettingsDep,
-) -> "SessionSettings":
+) -> "BrowserSessionSettings":
     """Return the browser-session settings section."""
-    return settings.session
+    return settings.browser_session
 
 
-SessionSettingsDep = Annotated["SessionSettings", Depends(get_session_settings)]
+BrowserSessionSettingsDep = Annotated[
+    "BrowserSessionSettings", Depends(get_browser_session_settings)
+]
 
 
 def get_csrf_settings(
     settings: SettingsDep,
 ) -> "CSRFSettings":
     """Return the CSRF settings section."""
-    return settings.session.csrf
+    return settings.browser_session.csrf
 
 
 CSRFSettingsDep = Annotated["CSRFSettings", Depends(get_csrf_settings)]
@@ -55,24 +56,14 @@ def get_oauth2_settings(
 OAuth2SettingsDep = Annotated["OAuth2Settings", Depends(get_oauth2_settings)]
 
 
-def get_mail_settings(
+def get_workflow_token_settings(
     settings: SettingsDep,
-) -> "MailSettings":
-    """Return the transactional-mail settings section."""
-    return settings.mail
+) -> "WorkflowTokenSettings":
+    """Provide identity workflow-token settings from the root snapshot."""
+    return settings.identity_workflow.workflow_tokens
 
 
-MailSettingsDep = Annotated["MailSettings", Depends(get_mail_settings)]
-
-
-def get_auth_token_settings(
-    settings: SettingsDep,
-) -> "AuthTokenSettings":
-    """Provide auth workflow token settings from the main Settings."""
-    return settings.auth.tokens
-
-
-AuthTokenSettingsDep = Annotated[
-    "AuthTokenSettings",
-    Depends(get_auth_token_settings),
+WorkflowTokenSettingsDep = Annotated[
+    "WorkflowTokenSettings",
+    Depends(get_workflow_token_settings),
 ]

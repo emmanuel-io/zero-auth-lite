@@ -18,15 +18,7 @@ async def oauth2_protocol_error_handler(
     request: Request,  # noqa: ARG001
     exc: OAuth2ProtocolError,
 ) -> JSONResponse:
-    """Serialize OAuth2 protocol errors without the application error envelope.
-
-    Args:
-        request: Incoming Starlette request.
-        exc: OAuth2 protocol exception raised by the domain or router layer.
-
-    Returns:
-        JSONResponse: RFC-style OAuth2 error response.
-    """
+    """Serialize an RFC-style OAuth2 error without the application envelope."""
     content: dict[str, Any] = {"error": exc.error}
     if exc.error_description is not None:
         content["error_description"] = exc.error_description

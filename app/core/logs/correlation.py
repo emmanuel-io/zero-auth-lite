@@ -5,8 +5,8 @@ from uuid import UUID, uuid4
 from app.core.specs import UUID_HEX_LENGTH
 
 
+# Length of one RFC 9562 UUID encoded as lowercase hexadecimal text.
 CORRELATION_ID_LENGTH = UUID_HEX_LENGTH
-"""Length of one RFC 9562 UUID encoded as lowercase hexadecimal text."""
 
 
 def generate_correlation_id() -> str:

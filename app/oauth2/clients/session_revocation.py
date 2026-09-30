@@ -2,12 +2,13 @@
 
 from datetime import datetime, UTC
 from typing import cast, TYPE_CHECKING
+from uuid import UUID
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.oauth2_session import OAuth2SessionDB
-from app.db.models.oauth2_token_pair import OAuth2TokenPairDB
+from app.db.models.oauth2_token_state import OAuth2TokenStateDB
 
 
 if TYPE_CHECKING:
@@ -21,11 +22,13 @@ class OAuth2ClientSessionRevocationService:
         """Initialize the revocation boundary."""
         self.db_session = db_session
 
-    async def persist(self, *, client_id: str) -> int:
-        """Revoke a client's sessions and token pairs in the current transaction."""
+    async def persist(self, *, client_id: UUID) -> int:
+        """Revoke a client's sessions and token states in the current transaction."""
         session_ids = (
             select(OAuth2SessionDB.id)
-            .join(OAuth2TokenPairDB, OAuth2TokenPairDB.session_id == OAuth2SessionDB.id)
+            .join(
+                OAuth2TokenStateDB, OAuth2TokenStateDB.session_id == OAuth2SessionDB.id
+            )
             .where(OAuth2SessionDB.client_id == client_id)
         )
         await self.db_session.execute(
@@ -37,8 +40,8 @@ class OAuth2ClientSessionRevocationService:
         result = cast(
             "CursorResult[object]",
             await self.db_session.execute(
-                delete(OAuth2TokenPairDB).where(
-                    OAuth2TokenPairDB.session_id.in_(session_ids)
+                delete(OAuth2TokenStateDB).where(
+                    OAuth2TokenStateDB.session_id.in_(session_ids)
                 )
             ),
         )

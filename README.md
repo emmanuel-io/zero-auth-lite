@@ -29,7 +29,8 @@ The documentation is organized by purpose:
   sessions, users, and organizations.
 - [Operations](docs/operations/deployment.md): deployment, persistence,
   workers, backups, logging, and security.
-- [Reference](docs/reference/settings.md): public settings, routes, and error
+- Reference: canonical [settings](docs/reference/settings.md),
+  [routes](docs/reference/routes.md), and [error](docs/reference/errors.md)
   contracts.
 - [Development](docs/development/setup.md): contributor setup, internal
   architecture, tests, conventions, and contribution.
@@ -37,13 +38,15 @@ The documentation is organized by purpose:
 ## Server Shape
 
 - `app/main.py` is the canonical FastAPI server entrypoint.
-- `app/browser_sessions/`, `app/oauth2/`, `app/oauth2/oidc/`, `app/auth_tokens/`,
+- `app/openapi.py` composes generic, application-security, and OAuth2/OIDC
+  OpenAPI policies owned by their respective modules.
+- `app/browser_sessions/`, `app/oauth2/`, `app/oauth2/oidc/`, `app/workflow_tokens/`,
   `app/identity/`, and `app/password/` hold the readable auth building blocks
   used by the server.
 - `app/api/v1/auth/` owns the versioned registration, verification,
   invitation, and password-recovery HTTP contract. Identity registration lives
-  in `app/identity/`, while `app/events/` builds durable auth notifications and
-  `app/mail/` owns mail transport and template rendering.
+  in `app/identity/`, while `app/notifications/` builds durable auth
+  notifications and `app/mail/` owns mail transport and template rendering.
 - `app/api/v1/organization/` groups current-organization metadata, user administration,
   and optional OAuth2 operations behind one settings-aware router.
 - `app/web/` provides the optional built-in Jinja login, consent, device, and
@@ -82,11 +85,15 @@ Zero Auth Lite does not claim OAuth2 or OpenID Connect certification.
 
 ## Run Locally
 
+Native execution requires a POSIX operating system because bootstrap operations
+use a POSIX file lock. On Windows, use WSL or the Docker Compose stack instead
+of running the Python processes directly.
+
 ```bash
 uv sync --all-groups --all-extras
 cp config/development.example.toml zero-auth-lite.toml
 uv run alembic upgrade head
-uv run uvicorn app.main:create_app --factory --reload
+uv run uvicorn app.main:create_app --factory --reload --no-access-log --no-proxy-headers
 ```
 
 Run these commands from the repository root so the server loads the copied
@@ -98,21 +105,29 @@ In separate terminals from the same directory, run durable event delivery and
 OAuth2 persistence cleanup:
 
 ```bash
-uv run python -m app.events.worker
+uv run python -m app.notifications.worker
+uv run python -m app.browser_sessions.cleanup_worker
 uv run python -m app.oauth2.cleanup_worker
 ```
 
 Open `http://localhost:8000/` for the built-in landing page,
 `http://localhost:8000/login` for browser login,
-`http://localhost:8000/health`, Swagger UI at
+`http://localhost:8000/health/live` for process liveness,
+`http://localhost:8000/health/ready` for SQLite readiness, Swagger UI at
 `http://localhost:8000/api/docs`, or ReDoc at
 `http://localhost:8000/api/redocs`.
-The server-rendered authentication forms are enabled by default. Set
-`ZA_UI__AUTHENTICATION=external` to use the mutually exclusive JSON
-auth/session transport with an external frontend, and configure
-`ZA_UI__EXTERNAL_LOGIN_URL` as that frontend's login entry point.
-OAuth2 continuations redirect there instead of assuming that `/login` exists.
-OAuth2/OIDC and identity-administration surfaces remain available in both.
+The server-rendered authentication forms and interactive JSON adapters are
+enabled by default. Set `ZA_UI__IDENTITY_WORKFLOW_MODE=external` when a separate
+frontend should replace the built-in forms; use
+`ZA_API__INTERACTIVE_AUTH_ROUTES_ENABLED` to control the JSON adapters for sessions,
+identity workflows, and external OAuth2 interactions independently. This flag
+does not disable the `/me`, `/organization`, or `/server` APIs.
+`ZA_UI__MANAGEMENT_AUTHENTICATION` independently
+chooses the built-in or external management login, while
+`ZA_UI__OAUTH2_INTERACTION` chooses built-in, external, or disabled OAuth2
+interaction. See the [built-in UI](docs/guides/builtin-authentication-ui.md)
+and [external UI](docs/guides/external-authentication-ui.md) guides for the
+required URLs and supported combinations.
 The explicit profile disables secure-cookie requirements only for this local
 HTTP process. The Compose path below retains the canonical HTTPS defaults.
 
@@ -123,12 +138,12 @@ docker compose up --build
 ```
 
 Mailpit is available through Caddy at
-`https://mail.zero-auth-lite.localhost:8443`. Caddy exposes the server on
+`https://mailpit.localhost:8443`. Caddy exposes the server on
 `https://auth.zero-auth-lite.localhost:8443`. Open Swagger UI at
 `https://auth.zero-auth-lite.localhost:8443/api/docs` or ReDoc at
 `https://auth.zero-auth-lite.localhost:8443/api/redocs`. Compose migrates the shared
 database volume before starting the backend and also starts the notification
-outbox and OAuth2 persistence-cleanup workers. Mailpit remains directly
+outbox, browser-session cleanup, and OAuth2 persistence-cleanup workers. Mailpit remains directly
 reachable at `http://localhost:8025` for local tooling.
 
 ## Development
@@ -173,7 +188,7 @@ keep secrets out of query strings, and update both runtime protocol tests and
 OpenAPI contract tests. The detailed rule lives in
 [docs/development/architecture/adr-oauth2-typed-fastapi-parameters.md](docs/development/architecture/adr-oauth2-typed-fastapi-parameters.md).
 
-## Documentation
+## Build the Documentation
 
 Serve the local documentation site with live reload:
 

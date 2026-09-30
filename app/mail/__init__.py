@@ -1,1 +1,1 @@
-"""Mail package."""
+"""Authentication email rendering and asynchronous SMTP delivery."""

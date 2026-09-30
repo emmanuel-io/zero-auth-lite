@@ -21,15 +21,18 @@ from app.db.models.oauth2_client import (
     OAuth2ClientMachineOrganizationDB,
 )
 from app.db.models.organization import OrganizationDB
-from app.identity.public_ids import parse_organization_id
-from app.oauth2.clients.access import OAuth2ClientMachineOrganizationAccess
+from app.identifiers import parse_uuid4
+from app.oauth2.clients.access import (
+    OAuth2ClientMachineOrganizationAccess,
+    organization_assignment_count_is_valid,
+)
 from app.oauth2.clients.credential_generation import (
     generate_oauth2_client_id,
     generate_oauth2_client_secret,
 )
 from app.oauth2.clients.dtos import OAuth2ClientRegistrationDTO
 from app.oauth2.clients.management.policy import OAuth2ClientPolicy
-from app.oauth2.settings import OAuth2GrantType
+from app.oauth2.grants.types import OAuth2GrantType
 from app.oauth2.specs import OAuth2Specs
 from app.password.async_hashing import hash_password
 from app.password.pwdlib_hasher import PwdlibPasswordHasher
@@ -38,6 +41,7 @@ from app.settings.root import load_settings
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+    from uuid import UUID
 
     from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -63,15 +67,15 @@ class PreparedMachineClient:
     """Validated machine registration with its generated credentials."""
 
     registration: OAuth2ClientRegistrationDTO
-    client_id: str
+    client_id: UUID
     client_secret: str
     client_secret_hash: str
     machine_organization_access: OAuth2ClientMachineOrganizationAccess
-    organization_ids: tuple[str, ...]
+    organization_ids: tuple[UUID, ...]
 
 
 def _validate_assignment_shape(
-    mode: OAuth2ClientMachineOrganizationAccess, organization_ids: Sequence[str]
+    mode: OAuth2ClientMachineOrganizationAccess, organization_ids: Sequence[UUID]
 ) -> None:
     """Validate assignment cardinality without touching persistence."""
     count = len(organization_ids)
@@ -79,6 +83,8 @@ def _validate_assignment_shape(
         raise MachineClientProvisionError(ERR_TOO_MANY_ORGANIZATIONS)
     if len(set(organization_ids)) != count:
         raise MachineClientProvisionError(ERR_DUPLICATE_ORGANIZATIONS)
+    if organization_assignment_count_is_valid(mode=mode, assignment_count=count):
+        return
     if (
         mode
         in {
@@ -89,9 +95,9 @@ def _validate_assignment_shape(
     ):
         msg = f"{mode.value} access does not accept organization IDs."
         raise MachineClientProvisionError(msg)
-    if mode == OAuth2ClientMachineOrganizationAccess.SINGLE and count != 1:
+    if mode == OAuth2ClientMachineOrganizationAccess.SINGLE:
         raise MachineClientProvisionError(ERR_SINGLE_ORGANIZATION)
-    if mode == OAuth2ClientMachineOrganizationAccess.SELECTED and count == 0:
+    if mode == OAuth2ClientMachineOrganizationAccess.SELECTED:
         raise MachineClientProvisionError(ERR_SELECTED_ORGANIZATION)
 
 
@@ -105,10 +111,16 @@ async def prepare_machine_client(  # noqa: PLR0913
     organization_ids: Sequence[str],
 ) -> PreparedMachineClient:
     """Validate input and hash a generated secret before opening a transaction."""
-    _validate_assignment_shape(machine_organization_access, organization_ids)
+    try:
+        parsed_organization_ids = tuple(
+            parse_uuid4(value) for value in organization_ids
+        )
+    except ValueError as exc:
+        raise MachineClientProvisionError(ERR_INVALID_ORGANIZATION_ID) from exc
+    _validate_assignment_shape(machine_organization_access, parsed_organization_ids)
     registration = OAuth2ClientRegistrationDTO(
         name=name,
-        grant_types=[OAuth2GrantType.client_credentials.value],
+        grant_types=[OAuth2GrantType.CLIENT_CREDENTIALS.value],
         scopes=list(scopes),
         redirect_uris=[],
         is_confidential=True,
@@ -128,7 +140,7 @@ async def prepare_machine_client(  # noqa: PLR0913
         client_secret=client_secret,
         client_secret_hash=await hash_password(password_hasher, client_secret),
         machine_organization_access=machine_organization_access,
-        organization_ids=tuple(organization_ids),
+        organization_ids=parsed_organization_ids,
     )
 
 
@@ -136,24 +148,17 @@ async def persist_machine_client(
     db_session: AsyncSession, prepared: PreparedMachineClient
 ) -> None:
     """Persist one prepared client inside the caller-owned transaction."""
-    try:
-        public_ids = [
-            parse_organization_id(value) for value in prepared.organization_ids
-        ]
-    except ValueError as exc:
-        raise MachineClientProvisionError(ERR_INVALID_ORGANIZATION_ID) from exc
+    public_ids = list(prepared.organization_ids)
     organizations = (
         (
             await db_session.scalars(
-                select(OrganizationDB).where(
-                    OrganizationDB.public_id.in_([int(value) for value in public_ids])
-                )
+                select(OrganizationDB).where(OrganizationDB.public_id.in_(public_ids))
             )
         ).all()
         if public_ids
         else []
     )
-    by_public_id = {int(row.public_id): row for row in organizations}
+    by_public_id = {row.public_id: row for row in organizations}
     if len(by_public_id) != len(public_ids):
         raise MachineClientProvisionError(ERR_ORGANIZATION_NOT_FOUND)
 
@@ -183,7 +188,7 @@ async def persist_machine_client(
             [
                 {
                     "client_id": client_db_id,
-                    "organization_id": by_public_id[int(public_id)].id,
+                    "organization_id": by_public_id[public_id].id,
                 }
                 for public_id in public_ids
             ],
@@ -278,7 +283,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     print(  # noqa: T201
         json.dumps(
             {
-                "client_id": prepared.client_id,
+                "client_id": str(prepared.client_id),
                 "client_secret": prepared.client_secret,
             },
             separators=(",", ":"),

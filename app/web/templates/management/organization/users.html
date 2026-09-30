@@ -1,0 +1,103 @@
+{% extends "management/fragment_base.html" if fragment else "management/base.html" %}
+{% block title %}Organization users · Zero Auth Lite{% endblock %}
+{% block content %}
+  {% if not fragment %}
+    <header class="page-header page-header--actions">
+      <div>
+        <p class="eyebrow">Organization administration</p>
+        <h1>Users</h1>
+        <p class="muted">{{ total }} matching user{% if total != 1 %}s{% endif %}.</p>
+      </div>
+      <a class="button button--primary" href="/management/organization/users/new">Add user</a>
+    </header>
+    <form class="toolbar" method="get" action="/management/organization/users" hx-get="/management/organization/users" hx-target="#user-results" hx-push-url="true" hx-trigger="input changed delay:300ms, change">
+      <div>
+        <label for="q">Search</label>
+        <input id="q" name="q" value="{{ filters.q or '' }}" placeholder="Name or email">
+      </div>
+      <div>
+        <label for="role">Role</label>
+        <select id="role" name="role">
+          <option value="">All roles</option>
+          <option value="member" {% if filters.role == 'member' %}selected{% endif %}>Member</option>
+          <option value="admin" {% if filters.role == 'admin' %}selected{% endif %}>Admin</option>
+        </select>
+      </div>
+      <div>
+        <label for="active">Active</label>
+        <select id="active" name="active">
+          <option value="">All</option>
+          <option value="true" {% if filters.active is sameas true %}selected{% endif %}>Yes</option>
+          <option value="false" {% if filters.active is sameas false %}selected{% endif %}>No</option>
+        </select>
+      </div>
+      <div>
+        <label for="verified">Verified</label>
+        <select id="verified" name="email_verified">
+          <option value="">All</option>
+          <option value="true" {% if filters.email_verified is sameas true %}selected{% endif %}>Yes</option>
+          <option value="false" {% if filters.email_verified is sameas false %}selected{% endif %}>No</option>
+        </select>
+      </div>
+      <div>
+        <label for="created-from">Created from</label>
+        <input id="created-from" type="date" name="created_from" value="{{ filters.created_from or '' }}">
+      </div>
+      <div>
+        <label for="created-to">Created to</label>
+        <input id="created-to" type="date" name="created_to" value="{{ filters.created_to or '' }}">
+      </div>
+      <button class="button button--secondary" type="submit">Filter</button>
+    </form>{% endif %}
+  <div id="user-results">
+    {% if users %}
+      <div class="table-wrap" tabindex="0" role="region" aria-label="Organization users">
+        <table>
+          <thead>
+            <tr>
+              <th>User</th>
+              <th>Role</th>
+              <th>State</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for user in users %}
+              <tr>
+                <td>
+                  <strong>{{ user.first_name }} {{ user.last_name }}</strong>
+                  <br>{{ user.email }}{% if user.pending_email %}
+                    <br>
+                    <span class="muted">Pending: {{ user.pending_email }}</span>
+                  {% endif %}
+                </td>
+                <td>{{ user.role }}</td>
+                <td>
+                  {% if user.is_active %}Active{% else %}Inactive{% endif %} · {% if user.email_verified %}Verified{% else %}Unverified{% endif %}
+                </td>
+                <td>
+                  <a class="button button--secondary button--compact" href="/management/organization/users/{{ user.id }}">Manage</a>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="empty-state">
+        <p>No users match these filters.</p>
+      </div>
+    {% endif %}
+    <nav class="pagination" aria-label="Pagination">
+      {% if previous_url %}
+        <a href="{{ previous_url }}">Previous</a>
+      {% else %}
+        <span>
+        </span>
+      {% endif %}
+      {% if next_url %}
+        <a href="{{ next_url }}">Next</a>
+      {% endif %}
+    </nav>
+  </div>
+{% endblock %}

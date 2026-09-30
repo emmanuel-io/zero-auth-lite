@@ -4,14 +4,10 @@ Browser sessions answer which user is operating the current browser. Zero Auth L
 stores session state on the server and gives the browser an opaque `HttpOnly`
 cookie. JavaScript does not need to read the session cookie.
 
-In external-authentication mode, the canonical server exposes its versioned
-browser-session contract under `/api/v1/sessions`:
-
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `POST` | `/api/v1/sessions/login` | Verify pre-session CSRF proof and credentials, then create a browser session. |
-| `POST` | `/api/v1/sessions/logout` | Revoke the current, other, or all sessions according to the JSON `scope`. |
-| `GET` | `/api/v1/sessions/csrf` | Issue pre-session CSRF state or expose current session CSRF state. |
+When browser JSON transport and browser sessions are enabled, the canonical
+server exposes its versioned browser-session contract under `/api/v1/sessions`.
+The [browser-session route reference](../reference/routes.md#browser-sessions)
+is the canonical inventory; the flow below explains how those routes cooperate.
 
 ## Actors And Artifacts
 
@@ -34,21 +30,23 @@ device continuation identifiers plus a validated same-origin return path; it
 never accepts an external caller-provided redirect destination.
 
 The [startup route matrix](../reference/routes.md#startup-route-matrix) is the
-canonical reference for choosing the built-in forms or external JSON routes.
+canonical reference for enabling JSON transport independently from management
+and OAuth2 presentation.
 
 1. The browser calls `GET /api/v1/sessions/csrf`. The server creates a random,
    stateless pre-session token and exposes it through the configured transport.
 2. The browser retains the CSRF cookie and submits the same value in the
    configured header, with `Origin` (or `Referer` as a fallback) and the JSON
-   credentials, to `POST /api/v1/sessions/login`.
+   credentials, `email` and `password`, to `POST /api/v1/sessions/login`.
 3. The server validates the origin and double-submit proof before checking the
    credentials.
 4. The authentication service loads the normalized current identity and the
    password hasher verifies the stored password hash outside the SQLite
    transaction.
-5. A conditional write rechecks the exact password hash and login eligibility
-   while acquiring SQLite's writer lock. A password or lifecycle change that
-   committed during verification therefore prevents session creation.
+5. A conditional write acquires SQLite's writer lock and rechecks the exact
+   password hash, active status, and that the submitted normalized address is
+   still the verified current address. A password, activation, or email-state
+   change committed during verification therefore prevents session creation.
 6. The authentication service creates server-side session state and rotates
    the pre-session token into a session-bound CSRF token.
 7. The route writes the session cookie and exposes session CSRF state according
@@ -81,10 +79,12 @@ activity useful without turning every authenticated
 it always preserves the newly issued session and removes older sessions using
 creation time plus their stable public identifier as a deterministic order.
 
-The session cookie and CSRF cookie have different purposes. The HttpOnly
-session cookie identifies an authenticated browser session. The readable CSRF
-cookie carries only the pre-session or session-bound proof that must be echoed
-in the configured header; it does not authenticate the browser by itself.
+The session cookie and CSRF cookie have different purposes. The `HttpOnly`
+session cookie identifies an authenticated browser session. With the default
+header exposure, the server exposes the CSRF proof in the response header and
+keeps its cookie `HttpOnly`. Cookie exposure instead makes the CSRF cookie
+readable by JavaScript. In both modes, the CSRF value carries only a pre-session
+or session-bound proof; it does not authenticate the browser by itself.
 
 FastAPI generates the JSON body, standard `Origin` and `Referer` headers,
 session-cookie security scheme, and OAuth2 permission scopes in OpenAPI. A
@@ -121,7 +121,7 @@ Server-rendered forms carry the proof in a hidden `csrf_token` field. Session
 helpers validate it against the stored synchronizer token or double-submit
 cookie using the configured pattern. Header-based API clients remain
 supported; this is one CSRF policy with two browser transports, not a separate
-OAuth2 mechanism.
+authentication mechanism and not part of OAuth2.
 
 Login always uses the pre-session cookie and header as a double-submit proof,
 including when authenticated requests use the synchronizer-token pattern. This

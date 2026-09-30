@@ -13,6 +13,8 @@ Place the handler in the feature that owns its behavior:
 - application JSON contracts belong under `app/api/v1/`;
 - browser-session JSON transport belongs under
   `app/api/v1/browser_sessions/` and is mounted at `/api/v1/sessions`;
+- external OAuth2 presentation adapters belong under
+  `app/api/v1/oauth2_interactions/` and are mounted at `/api/v1/oauth2`;
 - OAuth2 and OIDC protocol handlers belong under `app/oauth2/`;
 - built-in authentication pages belong under `app/web/`.
 
@@ -27,9 +29,11 @@ Route composition has three layers:
 2. A feature composer exposes `create_*_router(settings)` when settings or
    issuer-derived paths determine which leaf routers are present.
 3. `app.main.create_app()` mounts only top-level feature routers, middleware,
-   exception handlers, `/health`, and optional static assets.
+   exception handlers, `/health/*`, and optional static assets.
 
-Keep settings-driven route selection in the feature composer. Do not read
+`app/api/v1/router.py` composes every v1 subrouter before `/v1` is mounted once
+by the API version boundary. Keep settings-driven route selection in the
+feature composer. Do not read
 settings again inside leaf modules to decide whether a route exists.
 
 ## Add the Route

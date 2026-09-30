@@ -1,9 +1,12 @@
 """Machine organization-access policy for OAuth2 clients."""
 
 from logging import getLogger
+from uuid import UUID
 
-from app.identity.public_ids import format_organization_id
-from app.oauth2.clients.access import OAuth2ClientMachineOrganizationAccess
+from app.oauth2.clients.access import (
+    OAuth2ClientMachineOrganizationAccess,
+    organization_assignment_count_is_valid,
+)
 from app.oauth2.clients.dtos import (
     OAuth2ClientMachineOrganizationsDTO,
     OAuth2ClientMachineOrganizationUpdateDTO,
@@ -11,20 +14,35 @@ from app.oauth2.clients.dtos import (
 )
 from app.oauth2.clients.management.authorization import require_operator
 from app.oauth2.clients.management.errors import (
-    OAuth2ClientAdminNotFoundError,
+    OAuth2ClientManagementErrorReason,
+    OAuth2ClientManagementNotFoundError,
     OAuth2ClientOrganizationAccessConflictError,
 )
 from app.oauth2.clients.management.support import OAuth2ClientManagementSupport
-from app.security.dtos import UserPrincipalContext
+from app.security.principals import UserPrincipalContext
 
 
 logger = getLogger(__name__)
-ERR_MACHINE_ACCESS_INVALID = "OAUTH2_CLIENT_MACHINE_ORGANIZATION_ACCESS_INVALID"
-ERR_MACHINE_SINGLE_LIMIT = "OAUTH2_CLIENT_MACHINE_SINGLE_ORGANIZATION_LIMIT"
-ERR_MACHINE_ORGANIZATION_REQUIRED = "OAUTH2_CLIENT_MACHINE_ORGANIZATION_REQUIRED"
-ERR_MACHINE_REQUIRES_CLIENT_CREDENTIALS = (
-    "OAUTH2_CLIENT_MACHINE_ACCESS_REQUIRES_CLIENT_CREDENTIALS"
-)
+
+
+def validate_machine_organization_policy(
+    *, mode: OAuth2ClientMachineOrganizationAccess, organization_count: int
+) -> None:
+    """Require assignment cardinality consistent with a machine access mode."""
+    if organization_assignment_count_is_valid(
+        mode=mode, assignment_count=organization_count
+    ):
+        return
+    if mode in {
+        OAuth2ClientMachineOrganizationAccess.NONE,
+        OAuth2ClientMachineOrganizationAccess.UNRESTRICTED,
+    }:
+        reason = OAuth2ClientManagementErrorReason.MACHINE_ORGANIZATION_ACCESS_INVALID
+    elif mode == OAuth2ClientMachineOrganizationAccess.SINGLE:
+        reason = OAuth2ClientManagementErrorReason.MACHINE_SINGLE_ORGANIZATION_LIMIT
+    else:
+        reason = OAuth2ClientManagementErrorReason.MACHINE_ORGANIZATION_REQUIRED
+    raise OAuth2ClientOrganizationAccessConflictError(reason)
 
 
 class OAuth2ClientMachineOrganizationAccessService(OAuth2ClientManagementSupport):
@@ -50,27 +68,28 @@ class OAuth2ClientMachineOrganizationAccessService(OAuth2ClientManagementSupport
         return bool(previous_organization_ids - current_organization_ids)
 
     async def list_machine_organizations(
-        self, *, client_id: str, operator_ctx: UserPrincipalContext
+        self, *, client_id: UUID, operator_ctx: UserPrincipalContext
     ) -> OAuth2ClientMachineOrganizationsDTO:
         """List the current machine policy and explicit assignments."""
         require_operator(operator_ctx)
         client = await self._read_client(client_id)
         if client is None:
-            raise OAuth2ClientAdminNotFoundError
+            raise OAuth2ClientManagementNotFoundError
         organizations = await self._list_machine_organizations(client_id=client_id)
+        validate_machine_organization_policy(
+            mode=client.machine_organization_access,
+            organization_count=len(organizations),
+        )
         return OAuth2ClientMachineOrganizationsDTO(
             client_id=client.client_id,
             machine_organization_access=client.machine_organization_access,
-            organization_ids=[
-                format_organization_id(organization.public_id)
-                for organization in organizations
-            ],
+            organization_ids=[organization.public_id for organization in organizations],
         )
 
     async def replace_machine_organization_access(
         self,
         *,
-        client_id: str,
+        client_id: UUID,
         dto: OAuth2ClientMachineOrganizationUpdateDTO,
         operator_ctx: UserPrincipalContext,
     ) -> OAuth2ClientMachineOrganizationsDTO:
@@ -78,14 +97,14 @@ class OAuth2ClientMachineOrganizationAccessService(OAuth2ClientManagementSupport
         require_operator(operator_ctx)
         client = await self._read_client(client_id)
         if client is None:
-            raise OAuth2ClientAdminNotFoundError
+            raise OAuth2ClientManagementNotFoundError
         mode = dto.machine_organization_access
         if (
             "client_credentials" not in client.grant_types
             and mode != OAuth2ClientMachineOrganizationAccess.NONE
         ):
             raise OAuth2ClientOrganizationAccessConflictError(
-                ERR_MACHINE_REQUIRES_CLIENT_CREDENTIALS
+                OAuth2ClientManagementErrorReason.MACHINE_ACCESS_REQUIRES_CLIENT_CREDENTIALS
             )
 
         previous = await self._list_machine_organizations(client_id=client_id)
@@ -100,18 +119,10 @@ class OAuth2ClientMachineOrganizationAccessService(OAuth2ClientManagementSupport
         }:
             if dto.organization_ids not in (None, []):
                 raise OAuth2ClientOrganizationAccessConflictError(
-                    ERR_MACHINE_ACCESS_INVALID
+                    OAuth2ClientManagementErrorReason.MACHINE_ORGANIZATION_ACCESS_INVALID
                 )
             target = []
-        elif mode == OAuth2ClientMachineOrganizationAccess.SINGLE:
-            if len(target) != 1:
-                raise OAuth2ClientOrganizationAccessConflictError(
-                    ERR_MACHINE_SINGLE_LIMIT
-                )
-        elif not target:
-            raise OAuth2ClientOrganizationAccessConflictError(
-                ERR_MACHINE_ORGANIZATION_REQUIRED
-            )
+        validate_machine_organization_policy(mode=mode, organization_count=len(target))
 
         await self._replace_machine_organizations(
             client_id=client_id,
@@ -153,8 +164,5 @@ class OAuth2ClientMachineOrganizationAccessService(OAuth2ClientManagementSupport
         return OAuth2ClientMachineOrganizationsDTO(
             client_id=updated.client_id,
             machine_organization_access=updated.machine_organization_access,
-            organization_ids=[
-                format_organization_id(organization.public_id)
-                for organization in target
-            ],
+            organization_ids=[organization.public_id for organization in target],
         )

@@ -1,17 +1,24 @@
 """Tests for organization persistence models."""
 
 from pathlib import Path
+from typing import cast, TYPE_CHECKING
 
 import pytest
 from app.db.base import Base
 from app.db.models.organization import OrganizationDB
 from app.db.models.organization_membership import OrganizationMembershipDB
 from app.db.models.user import UserDB, UserEmailDB
-from app.identity.users.enums import OrganizationUserRole, UserEmailStatus
+from app.identity.users.enums import OrganizationMembershipRole, UserEmailStatus
 from sqlalchemy import create_engine, insert
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+
+from tests.identifiers import deterministic_uuid
+
+
+if TYPE_CHECKING:
+    from sqlalchemy import Table
 
 
 pytestmark = pytest.mark.integration
@@ -21,12 +28,15 @@ def _create_membership_tables(connection: Connection) -> None:
     """Create the three tables needed by membership constraint tests."""
     Base.metadata.create_all(
         connection,
-        tables=[
-            OrganizationDB.__table__,
-            UserDB.__table__,
-            UserEmailDB.__table__,
-            OrganizationMembershipDB.__table__,
-        ],
+        tables=cast(
+            "list[Table]",
+            [
+                OrganizationDB.__table__,
+                UserDB.__table__,
+                UserEmailDB.__table__,
+                OrganizationMembershipDB.__table__,
+            ],
+        ),
     )
 
 
@@ -35,11 +45,42 @@ def test_organization_name_cannot_be_blank(tmp_path: Path) -> None:
     engine = create_engine(f"sqlite:///{tmp_path / 'blank-name.db'}")
     try:
         with engine.connect() as connection:
-            Base.metadata.create_all(connection, tables=[OrganizationDB.__table__])
+            Base.metadata.create_all(
+                connection,
+                tables=cast("list[Table]", [OrganizationDB.__table__]),
+            )
             with Session(connection) as db_session:
-                db_session.add(OrganizationDB(name="   ", public_id=1))
+                db_session.add(
+                    OrganizationDB(name="   ", public_id=deterministic_uuid(1))
+                )
                 with pytest.raises(IntegrityError):
                     db_session.flush()
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize("value", ["Header\rInjection", "Header\nInjection"])
+def test_persistence_rejects_line_breaks_in_names(tmp_path: Path, value: str) -> None:
+    """Protect persisted names even when writes bypass domain validation."""
+    engine = create_engine(f"sqlite:///{tmp_path / 'unsafe-name.db'}")
+    try:
+        with engine.connect() as connection:
+            _create_membership_tables(connection)
+            with pytest.raises(IntegrityError, match="no_line_breaks"):
+                connection.execute(
+                    insert(OrganizationDB).values(
+                        name=value, public_id=deterministic_uuid(1)
+                    )
+                )
+            with pytest.raises(IntegrityError, match="no_line_breaks"):
+                connection.execute(
+                    insert(UserDB).values(
+                        first_name=value,
+                        last_name="Safe",
+                        hashed_password="not-used-in-this-test",  # noqa: S106
+                        public_id=deterministic_uuid(2),
+                    )
+                )
     finally:
         engine.dispose()
 
@@ -55,7 +96,10 @@ def test_organization_delete_is_restricted_while_users_exist(tmp_path: Path) -> 
                 organization = (
                     db_session.execute(
                         insert(OrganizationDB)
-                        .values(name="Occupied Organization", public_id=1)
+                        .values(
+                            name="Occupied Organization",
+                            public_id=deterministic_uuid(1),
+                        )
                         .returning(OrganizationDB)
                     )
                 ).scalar_one()
@@ -66,7 +110,7 @@ def test_organization_delete_is_restricted_while_users_exist(tmp_path: Path) -> 
                             first_name="Organization",
                             last_name="Member",
                             hashed_password="not-used-in-this-test",  # noqa: S106
-                            public_id=2,
+                            public_id=deterministic_uuid(2),
                         )
                         .returning(UserDB)
                     )
@@ -83,7 +127,7 @@ def test_organization_delete_is_restricted_while_users_exist(tmp_path: Path) -> 
                     OrganizationMembershipDB(
                         user_id=user.id,
                         organization_id=organization.id,
-                        role=OrganizationUserRole.MEMBER,
+                        role=OrganizationMembershipRole.MEMBER,
                     )
                 )
                 db_session.commit()
@@ -104,10 +148,12 @@ def test_membership_rejects_operator_as_an_organization_role(tmp_path: Path) -> 
             connection.exec_driver_sql("PRAGMA foreign_keys=ON")
             _create_membership_tables(connection)
             with Session(connection) as db_session:
-                organization = OrganizationDB(name="Scoped Roles", public_id=1)
+                organization = OrganizationDB(
+                    name="Scoped Roles", public_id=deterministic_uuid(1)
+                )
                 user = UserDB(
                     hashed_password="not-used-in-this-test",  # noqa: S106
-                    public_id=2,
+                    public_id=deterministic_uuid(2),
                 )
                 db_session.add_all([organization, user])
                 db_session.flush()
@@ -138,10 +184,12 @@ def test_user_delete_cascades_to_organization_membership(tmp_path: Path) -> None
             connection.exec_driver_sql("PRAGMA foreign_keys=ON")
             _create_membership_tables(connection)
             with Session(connection) as db_session:
-                organization = OrganizationDB(name="Cascade", public_id=1)
+                organization = OrganizationDB(
+                    name="Cascade", public_id=deterministic_uuid(1)
+                )
                 user = UserDB(
                     hashed_password="not-used-in-this-test",  # noqa: S106
-                    public_id=2,
+                    public_id=deterministic_uuid(2),
                 )
                 db_session.add_all([organization, user])
                 db_session.flush()
@@ -155,7 +203,7 @@ def test_user_delete_cascades_to_organization_membership(tmp_path: Path) -> None
                 membership = OrganizationMembershipDB(
                     user_id=user.id,
                     organization_id=organization.id,
-                    role=OrganizationUserRole.MEMBER,
+                    role=OrganizationMembershipRole.MEMBER,
                 )
                 db_session.add(membership)
                 db_session.commit()

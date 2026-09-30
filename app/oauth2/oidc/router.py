@@ -5,7 +5,6 @@ from typing import Annotated, Any
 from fastapi import (
     APIRouter,
     Depends,
-    HTTPException,
     Request,
     Response,
     Security,
@@ -13,11 +12,17 @@ from fastapi import (
 )
 from fastapi.security import HTTPAuthorizationCredentials
 
+from app.http_paths import OAUTH2_USERINFO_PATH
+from app.oauth2.error_codes import OAuth2ErrorCode
 from app.oauth2.errors import (
     OAuth2AccessTokenInvalidError,
     OAuth2ProtocolError,
-    OAuth2SessionInvalidError,
+    OAuth2TokenSessionInvalidError,
     OIDCOpenIDScopeRequiredError,
+)
+from app.oauth2.metadata import (
+    enabled_grant_types_supported,
+    token_endpoint_auth_methods_supported,
 )
 from app.oauth2.oidc.claims import (
     OIDC_ID_TOKEN_SIGNING_ALGS_SUPPORTED,
@@ -26,19 +31,15 @@ from app.oauth2.oidc.claims import (
     OIDC_SUPPORTED_SCOPES,
 )
 from app.oauth2.oidc.dependencies import OIDCUserInfoServiceDep
-from app.oauth2.oidc.keys import get_verify_keys
 from app.oauth2.oidc.schemas import OpenIDProviderMetadata, UserInfoResponse
 from app.oauth2.principal_dependencies import OAuth2BearerPrincipalServiceDep
 from app.oauth2.protocol_route import OAuth2ProtocolRoute
-from app.oauth2.routers.discovery import (
-    enabled_grant_types_supported,
-    token_endpoint_auth_methods_supported,
-)
 from app.oauth2.schemas import OAuth2ErrorResponse
+from app.oauth2.signing.keys import get_verify_keys
 from app.oauth2.urls import openid_configuration_path, public_route_url
 from app.openapi_tags import OIDC_TAG
-from app.security.dtos import OAuth2UserPrincipalContext
 from app.security.openapi import bearer
+from app.security.principals import OAuth2UserPrincipalContext
 from app.settings.dependencies import SettingsDep
 from app.settings.root import Settings
 
@@ -54,24 +55,24 @@ async def get_userinfo_principal_context(
     """Resolve the current OAuth2 principal from a bearer access token."""
     if credentials is None:
         raise OAuth2ProtocolError(
-            error="invalid_token",
+            error=OAuth2ErrorCode.INVALID_TOKEN,
             status_code=status.HTTP_401_UNAUTHORIZED,
             headers={"WWW-Authenticate": "Bearer"},
         )
     try:
-        principal = await bearer_principal_service.get_current_principal_context(
+        principal = await bearer_principal_service.get_current_oauth2_principal_context(
             access_token=credentials.credentials,
             key=get_verify_keys(settings.oauth2),
         )
-    except (OAuth2AccessTokenInvalidError, OAuth2SessionInvalidError) as exc:
+    except (OAuth2AccessTokenInvalidError, OAuth2TokenSessionInvalidError) as exc:
         raise OAuth2ProtocolError(
-            error="invalid_token",
+            error=OAuth2ErrorCode.INVALID_TOKEN,
             status_code=status.HTTP_401_UNAUTHORIZED,
             headers={"WWW-Authenticate": "Bearer"},
         ) from exc
     if not isinstance(principal, OAuth2UserPrincipalContext):
         raise OAuth2ProtocolError(
-            error="invalid_token",
+            error=OAuth2ErrorCode.INVALID_TOKEN,
             status_code=status.HTTP_401_UNAUTHORIZED,
             headers={"WWW-Authenticate": "Bearer"},
         )
@@ -113,26 +114,24 @@ async def openid_configuration(
     request: Request,
     settings: SettingsDep,
 ) -> OpenIDProviderMetadata:
-    """Return OpenID Connect discovery metadata when OIDC is enabled."""
+    """Return OpenID Connect discovery metadata."""
     oauth2_settings = settings.oauth2
-    if not oauth2_settings.oidc_enabled:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not_found")
     grant_types_supported = enabled_grant_types_supported(oauth2_settings)
     return OpenIDProviderMetadata(
-        issuer=oauth2_settings.jwt_issuer,
+        issuer=oauth2_settings.issuer,
         authorization_endpoint=public_route_url(
             request,
-            issuer=oauth2_settings.jwt_issuer,
+            issuer=oauth2_settings.issuer,
             route_name="authorize",
         ),
         token_endpoint=public_route_url(
             request,
-            issuer=oauth2_settings.jwt_issuer,
+            issuer=oauth2_settings.issuer,
             route_name="issue_token",
         ),
         userinfo_endpoint=public_route_url(
             request,
-            issuer=oauth2_settings.jwt_issuer,
+            issuer=oauth2_settings.issuer,
             route_name="userinfo_get",
         ),
         response_types_supported=["code"],
@@ -147,7 +146,7 @@ async def openid_configuration(
         code_challenge_methods_supported=["S256"],
         jwks_uri=public_route_url(
             request,
-            issuer=oauth2_settings.jwt_issuer,
+            issuer=oauth2_settings.issuer,
             route_name="jwks",
         ),
     )
@@ -157,7 +156,7 @@ def create_oidc_discovery_router(settings: Settings) -> APIRouter:
     """Create the issuer-derived OIDC discovery route."""
     discovery_router = APIRouter(tags=[OIDC_TAG], route_class=OAuth2ProtocolRoute)
     discovery_router.add_api_route(
-        openid_configuration_path(settings.oauth2.jwt_issuer),
+        openid_configuration_path(settings.oauth2.issuer),
         openid_configuration,
         methods=["GET"],
         response_model=OpenIDProviderMetadata,
@@ -184,20 +183,20 @@ async def _userinfo_response(
         return await userinfo_service.get_userinfo(principal_ctx=principal_ctx)
     except OIDCOpenIDScopeRequiredError as exc:
         raise OAuth2ProtocolError(
-            error="insufficient_scope",
+            error=OAuth2ErrorCode.INSUFFICIENT_SCOPE,
             status_code=status.HTTP_403_FORBIDDEN,
             headers={"WWW-Authenticate": 'Bearer scope="openid"'},
         ) from exc
-    except OAuth2SessionInvalidError as exc:
+    except OAuth2TokenSessionInvalidError as exc:
         raise OAuth2ProtocolError(
-            error="invalid_token",
+            error=OAuth2ErrorCode.INVALID_TOKEN,
             status_code=status.HTTP_401_UNAUTHORIZED,
             headers={"WWW-Authenticate": "Bearer"},
         ) from exc
 
 
 @router.get(
-    "/userinfo",
+    OAUTH2_USERINFO_PATH,
     response_model_exclude_none=True,
     name="userinfo_get",
     responses=USERINFO_ERROR_RESPONSES,
@@ -216,7 +215,7 @@ async def userinfo_get(
 
 
 @router.post(
-    "/userinfo",
+    OAUTH2_USERINFO_PATH,
     response_model_exclude_none=True,
     name="userinfo",
     responses=USERINFO_ERROR_RESPONSES,

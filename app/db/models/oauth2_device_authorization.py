@@ -1,8 +1,18 @@
 """SQLAlchemy model for OAuth2 device authorization."""
 
 from datetime import datetime
+from uuid import UUID
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, String
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    text,
+    Uuid,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -24,9 +34,19 @@ class OAuth2DeviceAuthorizationDB(Base, CreatedAtMixin, UpdatedAtMixin):
             "AND user_id IS NOT NULL AND organization_id IS NOT NULL)",
             name="decision_state_valid",
         ),
-        Index("ix_oauth2_device_code_hash", "device_code_hash", unique=True),
-        Index("ix_oauth2_user_code_hash", "user_code_hash", unique=True),
+        Index("uq_oauth2_device_code_hash", "device_code_hash", unique=True),
+        Index("uq_oauth2_user_code_hash", "user_code_hash", unique=True),
         Index("ix_oauth2_device_client_expires", "client_id", "expires_at"),
+        Index(
+            "ix_oauth2_device_authorization_used_id",
+            "id",
+            sqlite_where=text("used_at IS NOT NULL"),
+        ),
+        Index(
+            "ix_oauth2_device_authorization_denied_id",
+            "id",
+            sqlite_where=text("denied_at IS NOT NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(
@@ -38,8 +58,8 @@ class OAuth2DeviceAuthorizationDB(Base, CreatedAtMixin, UpdatedAtMixin):
     user_code_hash: Mapped[str] = mapped_column(
         String(OAuth2Specs.HASH_LENGTH), nullable=False
     )
-    client_id: Mapped[str] = mapped_column(
-        String(OAuth2Specs.CLIENT_ID_LENGTH_MAX),
+    client_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
         ForeignKey("oauth2_client.client_id", ondelete="CASCADE"),
         nullable=False,
     )

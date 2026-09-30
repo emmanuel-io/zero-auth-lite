@@ -147,7 +147,7 @@ untrusted traffic.
 
 Feature folders should keep related domain behavior, HTTP dependencies, routes,
 and persistence adapters together. `app/main.py` should only compose top-level
-surfaces such as `/oauth2`, `/api`, and `/health` according to the enabled
+surfaces such as `/oauth2`, `/api`, and `/health/*` according to the enabled
 settings. The versioned API composer mounts browser-session JSON transport
 under `/api/v1/sessions`.
 

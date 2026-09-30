@@ -7,7 +7,7 @@ import httpx
 import pytest
 from app.db.models.oauth2_client import OAuth2ClientDB
 from app.db.models.oauth2_session import OAuth2SessionDB
-from app.db.models.oauth2_token_pair import OAuth2TokenPairDB
+from app.db.models.oauth2_token_state import OAuth2TokenStateDB
 from fastapi import FastAPI, status
 from sqlalchemy import update
 
@@ -22,6 +22,8 @@ from tests.fixtures.oauth2 import (
     PASSWORD_HASHER,
     request_authorization_code,
 )
+from tests.fixtures.settings import app_settings
+from tests.identifiers import deterministic_uuid
 
 
 pytestmark = pytest.mark.api
@@ -34,8 +36,11 @@ async def test_introspection_returns_active_client_owned_access_token(
     client: httpx.AsyncClient,
 ) -> None:
     """Assert a client can introspect its own active access token."""
+
     raw_secret = await create_confidential_machine_client(app)
-    basic_payload = base64.b64encode(f"machine-client:{raw_secret}".encode()).decode()
+    basic_payload = base64.b64encode(
+        f"{deterministic_uuid('machine-client')}:{raw_secret}".encode()
+    ).decode()
     token_response = await client.post(
         "/oauth2/token",
         data={
@@ -58,11 +63,42 @@ async def test_introspection_returns_active_client_owned_access_token(
     assert response.status_code == status.HTTP_200_OK
     body = response.json()
     assert body["active"] is True
-    assert body["client_id"] == "machine-client"
-    assert body["sub"] == "machine-client"
+    assert body["client_id"] == str(deterministic_uuid("machine-client"))
+    assert body["sub"] == str(deterministic_uuid("machine-client"))
     assert body["scope"] == "service:read"
     assert response.headers["Cache-Control"] == "no-store"
     assert response.headers["Pragma"] == "no-cache"
+
+
+@pytest.mark.asyncio
+@pytest.mark.system
+@app_settings(oauth2={"allow_client_secret_post": True})
+async def test_introspection_accepts_confidential_client_form_credentials(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+) -> None:
+    """Authenticate introspection with configured client_secret_post credentials."""
+    raw_secret = await create_confidential_machine_client(app)
+    basic_payload = base64.b64encode(
+        f"{deterministic_uuid('machine-client')}:{raw_secret}".encode()
+    ).decode()
+    token_response = await client.post(
+        "/oauth2/token",
+        data={"grant_type": "client_credentials", "scope": "service:read"},
+        headers={"Authorization": f"Basic {basic_payload}"},
+    )
+
+    response = await client.post(
+        "/oauth2/introspect",
+        data={
+            "token": token_response.json()["access_token"],
+            "client_id": str(deterministic_uuid("machine-client")),
+            "client_secret": raw_secret,
+        },
+    )
+
+    assert response.status_code == status.HTTP_200_OK, response.text
+    assert response.json()["active"] is True
 
 
 @pytest.mark.asyncio
@@ -75,14 +111,14 @@ async def test_introspection_returns_active_client_owned_refresh_token(
     """Assert a client can introspect its own active refresh token."""
     raw_secret = await create_confidential_authorization_code_client(app)
     basic_payload = base64.b64encode(
-        f"confidential-client:{raw_secret}".encode()
+        f"{deterministic_uuid('confidential-client')}:{raw_secret}".encode()
     ).decode()
     login_response = await login_browser_session(client, verified_user_credentials)
     assert login_response.status_code == status.HTTP_204_NO_CONTENT
     authorize_response = await request_authorization_code(
         client,
         login_response=login_response,
-        client_id="confidential-client",
+        client_id=deterministic_uuid("confidential-client"),
         redirect_uri="https://confidential.example/callback",
     )
     token_response = await client.post(
@@ -108,7 +144,7 @@ async def test_introspection_returns_active_client_owned_refresh_token(
     assert response.status_code == status.HTTP_200_OK
     body = response.json()
     assert body["active"] is True
-    assert body["client_id"] == "confidential-client"
+    assert body["client_id"] == str(deterministic_uuid("confidential-client"))
     assert body["token_type"] == BEARER_TOKEN_TYPE
 
 
@@ -120,7 +156,9 @@ async def test_introspection_returns_inactive_for_ended_oauth2_session(
 ) -> None:
     """Assert ended OAuth2 sessions make their tokens introspect inactive."""
     raw_secret = await create_confidential_machine_client(app)
-    basic_payload = base64.b64encode(f"machine-client:{raw_secret}".encode()).decode()
+    basic_payload = base64.b64encode(
+        f"{deterministic_uuid('machine-client')}:{raw_secret}".encode()
+    ).decode()
     token_response = await client.post(
         "/oauth2/token",
         data={
@@ -157,7 +195,9 @@ async def test_introspection_returns_inactive_for_expired_access_token(
 ) -> None:
     """Assert expired access tokens do not introspect as active refresh tokens."""
     raw_secret = await create_confidential_machine_client(app)
-    basic_payload = base64.b64encode(f"machine-client:{raw_secret}".encode()).decode()
+    basic_payload = base64.b64encode(
+        f"{deterministic_uuid('machine-client')}:{raw_secret}".encode()
+    ).decode()
     token_response = await client.post(
         "/oauth2/token",
         data={
@@ -169,7 +209,7 @@ async def test_introspection_returns_inactive_for_expired_access_token(
     access_token = token_response.json()["access_token"]
     async with app.state.core_session_factory() as db_session:
         await db_session.execute(
-            update(OAuth2TokenPairDB).values(
+            update(OAuth2TokenStateDB).values(
                 access_expires_at=datetime.now(UTC) - timedelta(seconds=1)
             )
         )
@@ -200,7 +240,7 @@ async def test_introspection_hides_tokens_owned_by_another_client(
     async with app.state.core_session_factory() as db_session:
         db_session.add(
             OAuth2ClientDB(
-                client_id="other-machine-client",
+                client_id=deterministic_uuid("other-machine-client"),
                 client_secret=PASSWORD_HASHER.hash(other_secret),
                 name="Other Machine Client",
                 grant_types=["client_credentials"],
@@ -211,9 +251,11 @@ async def test_introspection_hides_tokens_owned_by_another_client(
             )
         )
         await db_session.commit()
-    basic_payload = base64.b64encode(f"machine-client:{raw_secret}".encode()).decode()
+    basic_payload = base64.b64encode(
+        f"{deterministic_uuid('machine-client')}:{raw_secret}".encode()
+    ).decode()
     other_basic_payload = base64.b64encode(
-        f"other-machine-client:{other_secret}".encode()
+        f"{deterministic_uuid('other-machine-client')}:{other_secret}".encode()
     ).decode()
     token_response = await client.post(
         "/oauth2/token",
@@ -239,13 +281,67 @@ async def test_introspection_hides_tokens_owned_by_another_client(
 
 @pytest.mark.asyncio
 @pytest.mark.negative
+async def test_introspection_rejects_token_and_session_client_mismatch(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+) -> None:
+    """Return inactive when JWT and persisted client bindings diverge."""
+    raw_secret = await create_confidential_machine_client(app)
+    basic_payload = base64.b64encode(
+        f"{deterministic_uuid('machine-client')}:{raw_secret}".encode()
+    ).decode()
+    token_response = await client.post(
+        "/oauth2/token",
+        data={"grant_type": "client_credentials", "scope": "service:read"},
+        headers={"Authorization": f"Basic {basic_payload}"},
+    )
+    other_secret = "other-introspection-secret"  # noqa: S105
+    async with app.state.core_session_factory() as db_session:
+        db_session.add(
+            OAuth2ClientDB(
+                client_id=deterministic_uuid("other-introspection-client"),
+                client_secret=PASSWORD_HASHER.hash(other_secret),
+                name="Other Introspection Client",
+                grant_types=["client_credentials"],
+                scopes=["service:read"],
+                redirect_uris=[],
+                is_confidential=True,
+                requires_consent=False,
+                is_active=True,
+            )
+        )
+        await db_session.flush()
+        await db_session.execute(
+            update(OAuth2SessionDB).values(
+                client_id=deterministic_uuid("other-introspection-client")
+            )
+        )
+        await db_session.commit()
+    other_basic_payload = base64.b64encode(
+        f"{deterministic_uuid('other-introspection-client')}:{other_secret}".encode()
+    ).decode()
+
+    response = await client.post(
+        "/oauth2/introspect",
+        data={"token": token_response.json()["access_token"]},
+        headers={"Authorization": f"Basic {other_basic_payload}"},
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json() == {"active": False}
+
+
+@pytest.mark.asyncio
+@pytest.mark.negative
 async def test_introspection_rejects_inactive_client(
     app: FastAPI,
     client: httpx.AsyncClient,
 ) -> None:
     """Assert inactive clients cannot authenticate for introspection."""
     raw_secret = await create_confidential_machine_client(app)
-    basic_payload = base64.b64encode(f"machine-client:{raw_secret}".encode()).decode()
+    basic_payload = base64.b64encode(
+        f"{deterministic_uuid('machine-client')}:{raw_secret}".encode()
+    ).decode()
     token_response = await client.post(
         "/oauth2/token",
         data={
@@ -257,7 +353,7 @@ async def test_introspection_rejects_inactive_client(
     async with app.state.core_session_factory() as db_session:
         await db_session.execute(
             update(OAuth2ClientDB)
-            .where(OAuth2ClientDB.client_id == "machine-client")
+            .where(OAuth2ClientDB.client_id == deterministic_uuid("machine-client"))
             .values(is_active=False)
         )
         await db_session.commit()

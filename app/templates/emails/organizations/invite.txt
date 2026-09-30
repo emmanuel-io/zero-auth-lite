@@ -1,0 +1,10 @@
+You have been invited
+
+Hello {{ name | default("there") }},
+
+An administrator invited you to join {{ organization_name }} on Zero Auth.
+
+Accept the invitation:
+{{ invite_url }}
+
+If you were not expecting this invitation, you can ignore this message.

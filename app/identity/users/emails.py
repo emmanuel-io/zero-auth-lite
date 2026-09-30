@@ -9,9 +9,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Load, selectinload
 
-from app.db.models.auth_token import UserAuthTokenDB
+from app.core.errors.base import AppError
+from app.core.errors.common import ObjectAlreadyExistsError
+from app.db.helpers import map_integrity_error
 from app.db.models.user import UserDB, UserEmailDB
-from app.errors import ObjectAlreadyExistsError
+from app.db.models.workflow_token import UserWorkflowTokenDB
 from app.identity.users.enums import UserEmailStatus
 from app.identity.users.types import UserEmail
 
@@ -57,6 +59,14 @@ async def email_is_available(
     return await db_session.scalar(statement.limit(1)) is None
 
 
+def map_user_email_integrity_error(exc: IntegrityError) -> AppError:
+    """Translate only the known active-address collision as an existing object."""
+    message = str(getattr(exc, "orig", None)).casefold()
+    if "unique constraint failed: user_email.normalized_email" in message:
+        return ObjectAlreadyExistsError()
+    return map_integrity_error(exc)
+
+
 async def create_user_email(
     db_session: AsyncSession,
     *,
@@ -83,7 +93,7 @@ async def create_user_email(
                 )
             ).scalar_one()
     except IntegrityError as exc:
-        raise ObjectAlreadyExistsError from exc
+        raise map_user_email_integrity_error(exc) from exc
     await db_session.flush()
     return row
 
@@ -107,9 +117,9 @@ async def retire_email(db_session: AsyncSession, *, email: UserEmailDB) -> None:
         return
     now = datetime.now(UTC)
     await db_session.execute(
-        update(UserAuthTokenDB)
-        .where(UserAuthTokenDB.user_email_id == email.id)
-        .where(UserAuthTokenDB.used_at.is_(None))
+        update(UserWorkflowTokenDB)
+        .where(UserWorkflowTokenDB.user_email_id == email.id)
+        .where(UserWorkflowTokenDB.used_at.is_(None))
         .values(used_at=now)
     )
     email.status = UserEmailStatus.RETIRED

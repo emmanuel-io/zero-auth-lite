@@ -1,21 +1,25 @@
 """Smoke tests for the canonical Zero Auth Lite application wiring."""
 
 from contextlib import suppress
+from typing import cast
 
 import pytest
 from app.browser_sessions.enums import CSRFTokenExposure
-from app.browser_sessions.settings import SessionSettings
-from app.main import _effective_cors_headers, create_app
+from app.browser_sessions.settings import BrowserSessionSettings
+from app.http_composition import effective_cors_headers
+from app.main import create_app
 from app.oauth2.settings import OAuth2Settings
-from app.settings.auth import AuthSettings
 from app.settings.cors import CorsSettings
 from app.settings.dependencies import get_settings
+from app.settings.identity_workflow import IdentityWorkflowSettings
 from app.settings.root import Settings
-from app.web.settings import (
-    AuthenticationUIMode,
+from app.settings.ui import (
+    IdentityWorkflowUIMode,
+    ManagementAuthenticationMode,
     OAuth2InteractionUIMode,
     UISettings,
 )
+from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.routing import NoMatchFound
 
@@ -61,14 +65,15 @@ def _paths(settings: Settings | None = None) -> set[str]:
 def _sessionless_settings() -> Settings:
     """Return a machine-to-machine OAuth2 server configuration."""
     return Settings(
-        session=SessionSettings(enabled=False),
+        browser_session=BrowserSessionSettings(enabled=False),
+        identity_workflow=IdentityWorkflowSettings(registration_enabled=False),
         ui=UISettings(
-            authentication=AuthenticationUIMode.EXTERNAL,
             oauth2_interaction=OAuth2InteractionUIMode.DISABLED,
         ),
         oauth2=OAuth2Settings().model_copy(
             update={
                 "authorization_code_enabled": False,
+                "refresh_token_enabled": False,
                 "device_code_enabled": False,
                 "oidc_enabled": False,
             }
@@ -76,20 +81,24 @@ def _sessionless_settings() -> Settings:
     )
 
 
-def test_external_auth_transport_mounts_only_json_routes() -> None:
-    """Expose JSON authentication without built-in authentication forms."""
+def test_json_transport_and_builtin_oauth_interactions_compose() -> None:
+    """Combine external management transport with built-in OAuth2 pages."""
     paths = _paths(
         Settings(
             ui=UISettings(
-                authentication=AuthenticationUIMode.EXTERNAL,
-                external_login_url=EXTERNAL_LOGIN_URL,
+                identity_workflow_mode=IdentityWorkflowUIMode.EXTERNAL,
+                management_authentication=ManagementAuthenticationMode.EXTERNAL,
+                urls={
+                    "login": EXTERNAL_LOGIN_URL,
+                    "logout": "https://frontend.test/logout",
+                },
             ),
         )
     )
 
     assert "/api/v1/sessions/login" in paths
     assert "/session/login" not in paths
-    assert "/login" not in paths
+    assert "/login" in paths
     assert "/consent" in paths
     assert "/api/v1/sessions/logout" in paths
     assert "/session/logout" not in paths
@@ -101,10 +110,10 @@ def test_external_auth_transport_mounts_only_json_routes() -> None:
     assert "/api/v1/me/password" in paths
     assert "/api/v1/auth/session/login" not in paths
     assert "/api/v1/auth/sessions" not in paths
-    assert "/api/v1/admin/sessions" in paths
-    assert "/api/v1/admin/organizations" in paths
-    assert "/api/v1/admin/users" in paths
-    assert "/api/v1/admin/oauth2/clients" in paths
+    assert "/api/v1/server/sessions" in paths
+    assert "/api/v1/server/organizations" in paths
+    assert "/api/v1/server/users" in paths
+    assert "/api/v1/server/oauth2/clients" in paths
     assert "/oauth2/authorize" in paths
     assert "/oauth2/device/verify" in paths
     assert "/oauth2/token" in paths
@@ -114,8 +123,8 @@ def test_external_auth_transport_mounts_only_json_routes() -> None:
     assert "/oauth2/userinfo" in paths
 
 
-def test_builtin_authentication_ui_mounts_only_form_transport() -> None:
-    """Expose HTML forms without interactive JSON authentication routes."""
+def test_default_server_mounts_builtin_and_json_identity_transports() -> None:
+    """Expose built-in forms and the independently enabled JSON transport."""
     app = create_app(Settings())
     paths = set(app.openapi()["paths"])
 
@@ -128,18 +137,18 @@ def test_builtin_authentication_ui_mounts_only_form_transport() -> None:
         "/verify-email",
         "/reset-password",
         "/accept-invite",
+        "/api/v1/auth/register",
+        "/api/v1/sessions/login",
+        "/api/v1/sessions/logout",
+        "/api/v1/sessions/csrf",
         "/consent",
         "/oauth2/device/verify",
         "/api/v1/me",
         "/api/v1/organization",
-        "/api/v1/admin/users",
+        "/api/v1/server/users",
         "/oauth2/token",
         "/.well-known/openid-configuration",
     } <= paths
-    assert "/api/v1/auth/register" not in paths
-    assert "/api/v1/sessions/login" not in paths
-    assert "/api/v1/sessions/logout" not in paths
-    assert "/api/v1/sessions/csrf" not in paths
     assert app.openapi()["paths"]["/login"]["post"]["tags"] == [
         "Built-in Authentication UI"
     ]
@@ -166,6 +175,52 @@ def test_full_server_mounts_application_api_only_under_api_prefix() -> None:
     assert "/api/v1/oauth2/sessions" not in paths
 
 
+def test_management_ui_toggles_only_control_html_routes() -> None:
+    """Keep account self-service when it is the only mounted browser surface."""
+    paths = _paths(
+        Settings(
+            ui=UISettings(
+                identity_workflow_mode=IdentityWorkflowUIMode.EXTERNAL,
+                management_authentication=ManagementAuthenticationMode.EXTERNAL,
+                oauth2_interaction=OAuth2InteractionUIMode.DISABLED,
+                urls={
+                    "login": EXTERNAL_LOGIN_URL,
+                    "logout": "https://frontend.test/logout",
+                },
+                organization_admin_enabled=False,
+                operator_enabled=False,
+            ),
+            oauth2=OAuth2Settings().model_copy(update={"device_code_enabled": False}),
+        )
+    )
+
+    assert "/management" in paths
+    assert "/management/organization" not in paths
+    assert "/management/operator" not in paths
+    assert "/management/account" in paths
+    assert "/organization" not in paths
+    assert "/admin" not in paths
+    assert "/account" not in paths
+    assert "/login" not in paths
+    assert "/register" not in paths
+    assert "/consent" not in paths
+    assert "/oauth2/device/verify" not in paths
+    assert "/api/v1/organization" in paths
+    assert "/api/v1/server/users" in paths
+
+
+def test_sessionless_server_omits_enabled_management_ui_routes() -> None:
+    """Treat sessionless mode as an effective management-UI disablement."""
+    paths = _paths(_sessionless_settings())
+
+    assert "/management" not in paths
+    assert "/management/organization" not in paths
+    assert "/management/operator" not in paths
+    assert "/management/account" not in paths
+    assert "/api/v1/organization" in paths
+    assert "/api/v1/server/users" in paths
+
+
 def test_full_server_uses_direct_app_state() -> None:
     """Verify the app owns direct authentication state."""
     app = create_app()
@@ -178,6 +233,15 @@ def test_full_server_uses_direct_app_state() -> None:
     assert not hasattr(app.state, "zero_auth")
 
 
+def test_empty_cors_origins_omit_cors_middleware() -> None:
+    """Treat an empty allowlist as an explicit same-origin configuration."""
+    app = create_app(Settings(cors=CorsSettings(allowed_origins=())))
+
+    assert all(
+        cast("object", item.cls) is not CORSMiddleware for item in app.user_middleware
+    )
+
+
 def test_cors_headers_include_configured_session_csrf_transport() -> None:
     """Keep custom CSRF request and response headers usable across origins."""
     settings = Settings(
@@ -185,12 +249,12 @@ def test_cors_headers_include_configured_session_csrf_transport() -> None:
             allow_headers=("Content-Type",),
             expose_headers=("X-Request-Id",),
         ),
-        session=SessionSettings(
+        browser_session=BrowserSessionSettings(
             csrf={"header_name": "X-Zero-CSRF"},
         ),
     )
 
-    allow_headers, expose_headers = _effective_cors_headers(settings)
+    allow_headers, expose_headers = effective_cors_headers(settings)
 
     assert allow_headers == ("Content-Type", "X-Zero-CSRF")
     assert expose_headers == ("X-Request-Id", "X-Zero-CSRF")
@@ -203,7 +267,7 @@ def test_cookie_exposure_only_adds_csrf_request_header_to_cors() -> None:
             allow_headers=("Content-Type",),
             expose_headers=("X-Request-Id",),
         ),
-        session=SessionSettings(
+        browser_session=BrowserSessionSettings(
             csrf={
                 "header_name": "X-Zero-CSRF",
                 "expose_token": CSRFTokenExposure.COOKIE,
@@ -211,7 +275,7 @@ def test_cookie_exposure_only_adds_csrf_request_header_to_cors() -> None:
         ),
     )
 
-    allow_headers, expose_headers = _effective_cors_headers(settings)
+    allow_headers, expose_headers = effective_cors_headers(settings)
 
     assert allow_headers == ("Content-Type", "X-Zero-CSRF")
     assert expose_headers == ("X-Request-Id",)
@@ -229,29 +293,35 @@ def test_sessionless_oauth2_app_omits_browser_session_wiring() -> None:
         "/oauth2/introspect",
         "/oauth2/jwks.json",
         "/.well-known/oauth-authorization-server",
-        "/api/v1/admin/oauth2/clients",
+        "/api/v1/server/oauth2/clients",
     } <= paths
     assert "/api/v1/sessions/login" not in paths
     assert "/api/v1/me/sessions" not in paths
     assert "/api/v1/me/password" not in paths
     me_route_methods = {method.upper() for method in schema["paths"]["/api/v1/me"]}
     assert "DELETE" not in me_route_methods
-    assert "/api/v1/admin/sessions" not in paths
+    assert "/api/v1/server/sessions" not in paths
     assert "/oauth2/authorize" not in paths
     assert "/oauth2/device_authorization" not in paths
     assert "/.well-known/openid-configuration" not in paths
     assert not hasattr(app.state, "memory_session_store")
     assert all(
-        "session" not in item.cls.__name__.lower() for item in app.user_middleware
+        "session" not in getattr(item.cls, "__name__", "").lower()
+        for item in app.user_middleware
     )
 
 
-def test_health_route_has_no_package_root_dependency() -> None:
-    """Assert health route stays outside auth dependencies."""
+def test_health_routes_have_explicit_operational_contracts() -> None:
+    """Keep health probes outside auth and document readiness failure."""
     app = create_app()
-    operation = app.openapi()["paths"]["/health"]["get"]
+    schema = app.openapi()
+    liveness = schema["paths"]["/health/live"]["get"]
+    readiness = schema["paths"]["/health/ready"]["get"]
 
-    assert "security" not in operation
+    assert "security" not in liveness
+    assert "security" not in readiness
+    assert "503" in readiness["responses"]
+    assert "/health" not in schema["paths"]
 
 
 def test_disabled_protocol_routes_are_not_mounted() -> None:
@@ -263,16 +333,21 @@ def test_disabled_protocol_routes_are_not_mounted() -> None:
     assert "/api/v1/organization/oauth2/sessions" not in paths
     assert "/api/v1/organization/oauth2/sessions/{session_id}" not in paths
     assert "/api/v1/organization/oauth2/clients/{client_id}/tokens" not in paths
-    assert "/api/v1/admin/oauth2/clients" not in paths
+    assert "/api/v1/server/oauth2/clients" not in paths
 
 
-def test_builtin_ui_can_be_disabled_without_removing_identity_workflows() -> None:
-    """Remove built-in HTML while keeping permanent identity APIs."""
+def test_external_auth_keeps_management_ui_and_identity_workflows() -> None:
+    """Keep session-backed management HTML independent from auth-form ownership."""
     paths = _paths(
         Settings(
             ui=UISettings(
-                authentication=AuthenticationUIMode.EXTERNAL,
+                identity_workflow_mode=IdentityWorkflowUIMode.EXTERNAL,
+                management_authentication=ManagementAuthenticationMode.EXTERNAL,
                 oauth2_interaction=OAuth2InteractionUIMode.DISABLED,
+                urls={
+                    "login": EXTERNAL_LOGIN_URL,
+                    "logout": "https://frontend.test/logout",
+                },
             ),
             oauth2=OAuth2Settings(device_code_enabled=False),
         )
@@ -290,9 +365,9 @@ def test_builtin_ui_can_be_disabled_without_removing_identity_workflows() -> Non
         "/api/v1/organization/users",
         "/api/v1/organization/users/{user_id}/invitation",
         "/api/v1/organization",
-        "/api/v1/admin/users",
-        "/api/v1/admin/users/{user_id}/invitation",
-        "/api/v1/admin/organizations",
+        "/api/v1/server/users",
+        "/api/v1/server/users/{user_id}/invitation",
+        "/api/v1/server/organizations",
     } <= paths
     assert "/verify-email" not in paths
     assert "/reset-password" not in paths
@@ -300,6 +375,13 @@ def test_builtin_ui_can_be_disabled_without_removing_identity_workflows() -> Non
     assert "/login" not in paths
     assert "/consent" not in paths
     assert "/oauth2/device/verify" not in paths
+    assert "/management" in paths
+    assert "/management/organization" in paths
+    assert "/management/operator" in paths
+    assert "/management/account" in paths
+    assert "/organization" not in paths
+    assert "/admin" not in paths
+    assert "/account" not in paths
 
 
 def test_disabled_oauth2_ui_omits_consent_with_builtin_auth_forms() -> None:
@@ -323,19 +405,31 @@ def test_public_registration_flow_can_be_disabled_independently() -> None:
     """Remove signup verification without removing other identity workflows."""
     app = create_app(
         Settings(
-            auth=AuthSettings(registration_enabled=False),
+            identity_workflow=IdentityWorkflowSettings(
+                registration_enabled=False,
+            ),
             ui=UISettings(
-                authentication=AuthenticationUIMode.EXTERNAL,
-                external_login_url=EXTERNAL_LOGIN_URL,
+                identity_workflow_mode=IdentityWorkflowUIMode.EXTERNAL,
+                management_authentication=ManagementAuthenticationMode.EXTERNAL,
+                urls={
+                    "login": EXTERNAL_LOGIN_URL,
+                    "logout": "https://frontend.test/logout",
+                },
             ),
         )
     )
     paths = _paths(
         Settings(
-            auth=AuthSettings(registration_enabled=False),
+            identity_workflow=IdentityWorkflowSettings(
+                registration_enabled=False,
+            ),
             ui=UISettings(
-                authentication=AuthenticationUIMode.EXTERNAL,
-                external_login_url=EXTERNAL_LOGIN_URL,
+                identity_workflow_mode=IdentityWorkflowUIMode.EXTERNAL,
+                management_authentication=ManagementAuthenticationMode.EXTERNAL,
+                urls={
+                    "login": EXTERNAL_LOGIN_URL,
+                    "logout": "https://frontend.test/logout",
+                },
             ),
         )
     )
@@ -349,13 +443,13 @@ def test_public_registration_flow_can_be_disabled_independently() -> None:
         "/api/v1/auth/password/forgot",
         "/api/v1/auth/password/reset",
         "/api/v1/auth/invite/accept",
-        "/api/v1/admin/users",
-        "/api/v1/admin/users/{user_id}/invitation",
+        "/api/v1/server/users",
+        "/api/v1/server/users/{user_id}/invitation",
     } <= paths
 
     builtin_paths = _paths(
         Settings(
-            auth=AuthSettings(registration_enabled=False),
+            identity_workflow=IdentityWorkflowSettings(registration_enabled=False),
         )
     )
     assert "/register" not in builtin_paths
@@ -373,7 +467,7 @@ def test_issuer_derived_routes_are_fixed_during_app_construction() -> None:
         oauth2=OAuth2Settings.model_validate(
             {
                 **oauth2.model_dump(),
-                "jwt_issuer": "https://issuer.example/organization",
+                "issuer": "https://issuer.example/organization",
             }
         )
     )
@@ -394,7 +488,7 @@ def test_explicit_settings_take_precedence_over_environment(
     paths = _paths(settings)
 
     assert "/oauth2/token" in paths
-    assert "/api/v1/admin/oauth2/clients" in paths
+    assert "/api/v1/server/oauth2/clients" in paths
 
 
 def test_environment_changes_do_not_reconfigure_an_existing_app(

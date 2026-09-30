@@ -16,16 +16,28 @@ instead.
 The default configuration includes:
 
 ```text
-ZA_UI__AUTHENTICATION=builtin
+ZA_API__INTERACTIVE_AUTH_ROUTES_ENABLED=true
+ZA_UI__IDENTITY_WORKFLOW_MODE=builtin
+ZA_UI__MANAGEMENT_AUTHENTICATION=builtin
 ZA_UI__OAUTH2_INTERACTION=builtin
-ZA_SESSION__ENABLED=true
+ZA_UI__ORGANIZATION_ADMIN_ENABLED=true
+ZA_UI__OPERATOR_ENABLED=true
+ZA_BROWSER_SESSION__ENABLED=true
 ```
 
-`ui.authentication` selects the built-in authentication and identity-workflow
-forms. `ui.oauth2_interaction` independently controls the OAuth2 consent and
-Device Code pages. Browser login and logout also require sessions. See the
+The `builtin` value for `ui.identity_workflow_mode` selects the server-rendered
+identity-workflow forms. The independently enabled
+`api.interactive_auth_routes_enabled` keeps the JSON adapters available for API
+clients. `ui.management_authentication` selects `/login` and `/logout` for
+management, while `ui.oauth2_interaction` independently controls OAuth2 login,
+consent, and Device Code pages. Browser login and logout require sessions. See the
 [startup route matrix](../reference/routes.md#startup-route-matrix) for the
 exact surfaces mounted by each combination.
+
+The administration toggles are independent from the authentication
+presentation mode. An external login application may establish the canonical
+browser session and then return the user to `/management`,
+`/management/organization`, or `/management/operator`.
 
 ## Available Pages
 
@@ -35,6 +47,8 @@ without client-side JavaScript:
 | Path | Purpose |
 | --- | --- |
 | `/` | Open the server landing page. |
+| `/management` | Open the authenticated management dashboard. |
+| `/management/account` | Read and update the authenticated user's profile. |
 | `/login` | Authenticate credentials and create a browser session. |
 | `/logout` | Revoke the current browser session. |
 | `/register` | Create an organization and its initial user when registration is enabled. |
@@ -46,6 +60,23 @@ without client-side JavaScript:
 
 The [route reference](../reference/routes.md#built-in-authentication-transport)
 lists the supported methods and feature conditions.
+
+Anonymous authentication workflows use a compact, focused page shell. After
+login, `/` redirects to the role-aware dashboard at `/management`.
+Authenticated management pages share a responsive application header. The
+header always exposes Home, Account, and
+Sign out, then adds Organization and Operator destinations only when the
+current user has that authority. Its mobile menu uses native HTML and CSS, so
+navigation remains available without JavaScript.
+
+The account page is self-service rather than administration. Every authenticated
+browser user can update their email, first name, and last name regardless of
+organization-admin or operator authority. A changed email remains pending until
+the user completes email verification; the current verified address continues to
+identify the account in the meantime.
+Unlike the authentication workflow pages, `/management/account` remains mounted
+when external management authentication is selected, as long as browser
+sessions are enabled.
 
 ## Authenticate A Browser
 
@@ -67,14 +98,17 @@ lifetime, session renewal, and revocation.
 ## Continue OAuth2 Interactions
 
 An unauthenticated Authorization Code request redirects the browser to
-`/login` with an opaque `transaction_id`. After login, Zero Auth Lite resumes the
-validated transaction at `/consent`. The client receives an authorization code
-only after the server has authenticated the user and completed any required
-consent decision. The client never sees the user's password.
+`/login` with an opaque `transaction_id`. After login, Zero Auth Lite resumes
+the validated transaction at `/consent`. This browser navigation binds the
+transaction and consumes it immediately when explicit consent is not required.
+The client receives an authorization code only after the server has authenticated
+the user and completed any required consent decision. The client never sees the
+user's password.
 
-For Device Code, the login page carries an opaque device continuation. After
-authentication, Zero Auth Lite returns the browser to `/oauth2/device/verify`, where
-the user approves or denies the request.
+For Device Code, the login page carries the `user_code` shown to the user. It
+never carries the separate `device_code` secret held by the client. After
+authentication, Zero Auth Lite returns the browser to `/oauth2/device/verify`,
+where the user approves or denies the request.
 
 The continuation values identify server-side state. They are not access
 tokens, redirect destinations, or data for the browser to decode. When login is
@@ -94,6 +128,29 @@ operation; they are not OAuth2 access tokens and cannot call protected APIs.
 Successful form submissions use redirects so refreshing the resulting page
 does not repeat the credential or token mutation.
 
-The built-in UI is deliberately a small authentication surface, not a general
-account-management application. Profile, session, authorization, organization,
-and operator operations remain in the versioned `/api/v1` API.
+## Administer The Server In A Browser
+
+After login, every user can open `/management` and `/management/account`.
+Current organization administrators can also open `/management/organization`,
+and server operators can open `/management/operator`. A user holding both
+roles sees both administration links.
+These htmx-enhanced pages are a presentation layer over the existing identity,
+session, and OAuth2 services; the stable programmatic contracts remain under
+`/api/v1/organization` and `/api/v1/server`.
+
+Authentication and authorization stay separate. The session identifies the
+user, then every request reloads the user's current roles before granting the
+organization or operator action. OAuth2 scopes do not grant access to these
+browser pages, and enabling or disabling a browser UI does not change API
+permissions.
+
+All mutations carry session-bound CSRF proof. Deletion, revocation, credential
+rotation, and global cleanup also require visible confirmation. htmx updates
+list fragments when JavaScript is available; ordinary server-rendered forms use
+POST/Redirect/GET as the fallback.
+
+The bundled htmx asset is loaded from the server itself. The browser Content
+Security Policy permits scripts and asynchronous connections only to the same
+origin through `script-src 'self'` and `connect-src 'self'`; no deployment host
+is embedded in the policy. Validation and application failures on these pages
+are rendered as HTML, including fragment responses for htmx requests.

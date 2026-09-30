@@ -1,5 +1,7 @@
 """Shared persistence helpers for OAuth2 client administration services."""
 
+from uuid import UUID
+
 from sqlalchemy import delete, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.selectable import ScalarSelect
@@ -12,21 +14,19 @@ from app.db.models.oauth2_client import (
 from app.db.models.organization import OrganizationDB
 from app.identity.dtos import IdentityOrganizationDTO
 from app.identity.mapping import to_organization
-from app.identity.public_ids import parse_organization_id
 from app.oauth2.clients.dtos import (
     OAuth2ClientPersistenceUpdateDTO,
     OAuth2ClientReadDTO,
 )
 from app.oauth2.clients.management.errors import (
     InvalidOAuth2ClientPayloadError,
-    OAuth2ClientAdminNotFoundError,
+    OAuth2ClientManagementErrorReason,
+    OAuth2ClientManagementNotFoundError,
 )
 from app.oauth2.clients.session_revocation import OAuth2ClientSessionRevocationService
 from app.oauth2.specs import OAuth2Specs
 
 
-ERR_INVALID_ORGANIZATION_ID = "invalid_organization_id"
-ERR_ORGANIZATION_NOT_FOUND = "organization_not_found"
 type OAuth2ClientOrganizationAssignmentDB = (
     OAuth2ClientMachineOrganizationDB | OAuth2ClientUserOrganizationDB
 )
@@ -42,14 +42,14 @@ class OAuth2ClientManagementSupport:
             db_session=db_session
         )
 
-    async def _read_client(self, client_id: str) -> OAuth2ClientReadDTO | None:
+    async def _read_client(self, client_id: UUID) -> OAuth2ClientReadDTO | None:
         """Read one client registration by its public protocol identifier."""
         row = await self.db_session.scalar(
             select(OAuth2ClientDB).where(OAuth2ClientDB.client_id == client_id)
         )
         return OAuth2ClientReadDTO.model_validate(row) if row is not None else None
 
-    def _client_internal_id(self, client_id: str) -> ScalarSelect[int]:
+    def _client_internal_id(self, client_id: UUID) -> ScalarSelect[int]:
         """Return the internal client identifier as a scalar subquery."""
         return (
             select(OAuth2ClientDB.id)
@@ -60,7 +60,7 @@ class OAuth2ClientManagementSupport:
     async def _list_organization_assignments(
         self,
         *,
-        client_id: str,
+        client_id: UUID,
         assignment_model: type[OAuth2ClientOrganizationAssignmentDB],
     ) -> list[IdentityOrganizationDTO]:
         """List explicitly assigned organizations in deterministic order."""
@@ -80,7 +80,7 @@ class OAuth2ClientManagementSupport:
         return [to_organization(row) for row in rows]
 
     async def _list_user_organizations(
-        self, *, client_id: str
+        self, *, client_id: UUID
     ) -> list[IdentityOrganizationDTO]:
         """List organizations assigned to user-backed grants."""
         return await self._list_organization_assignments(
@@ -89,7 +89,7 @@ class OAuth2ClientManagementSupport:
         )
 
     async def _list_machine_organizations(
-        self, *, client_id: str
+        self, *, client_id: UUID
     ) -> list[IdentityOrganizationDTO]:
         """List organizations assigned to the machine principal."""
         return await self._list_organization_assignments(
@@ -98,38 +98,39 @@ class OAuth2ClientManagementSupport:
         )
 
     async def _resolve_organizations(
-        self, organization_ids: list[str]
+        self, organization_ids: list[UUID]
     ) -> list[IdentityOrganizationDTO]:
         """Resolve one bounded assignment set with a single SQLite query."""
         if len(organization_ids) > OAuth2Specs.CLIENT_ORGANIZATION_ASSIGNMENTS_MAX:
-            raise InvalidOAuth2ClientPayloadError(ERR_INVALID_ORGANIZATION_ID)
-        try:
-            public_ids = [parse_organization_id(value) for value in organization_ids]
-        except ValueError as exc:
-            raise InvalidOAuth2ClientPayloadError(ERR_INVALID_ORGANIZATION_ID) from exc
+            raise InvalidOAuth2ClientPayloadError(
+                OAuth2ClientManagementErrorReason.INVALID_ORGANIZATION_ID
+            )
+        public_ids = organization_ids
         if len(public_ids) != len(set(public_ids)):
-            raise InvalidOAuth2ClientPayloadError(ERR_INVALID_ORGANIZATION_ID)
+            raise InvalidOAuth2ClientPayloadError(
+                OAuth2ClientManagementErrorReason.INVALID_ORGANIZATION_ID
+            )
         if not public_ids:
             return []
 
         rows = (
             await self.db_session.scalars(
-                select(OrganizationDB).where(
-                    OrganizationDB.public_id.in_([int(value) for value in public_ids])
-                )
+                select(OrganizationDB).where(OrganizationDB.public_id.in_(public_ids))
             )
         ).all()
         organizations_by_public_id = {
-            int(row.public_id): to_organization(row) for row in rows
+            row.public_id: to_organization(row) for row in rows
         }
         if len(organizations_by_public_id) != len(public_ids):
-            raise InvalidOAuth2ClientPayloadError(ERR_ORGANIZATION_NOT_FOUND)
-        return [organizations_by_public_id[int(value)] for value in public_ids]
+            raise InvalidOAuth2ClientPayloadError(
+                OAuth2ClientManagementErrorReason.ORGANIZATION_NOT_FOUND
+            )
+        return [organizations_by_public_id[value] for value in public_ids]
 
     async def _replace_organization_assignments(
         self,
         *,
-        client_id: str,
+        client_id: UUID,
         organization_ids: list[int],
         assignment_model: type[OAuth2ClientOrganizationAssignmentDB],
     ) -> None:
@@ -143,7 +144,7 @@ class OAuth2ClientManagementSupport:
                 select(OAuth2ClientDB.id).where(OAuth2ClientDB.client_id == client_id)
             )
             if client_db_id is None:
-                raise OAuth2ClientAdminNotFoundError
+                raise OAuth2ClientManagementNotFoundError
             await self.db_session.execute(
                 insert(assignment_model),
                 [
@@ -154,7 +155,7 @@ class OAuth2ClientManagementSupport:
         await self.db_session.flush()
 
     async def _replace_user_organizations(
-        self, *, client_id: str, organization_ids: list[int]
+        self, *, client_id: UUID, organization_ids: list[int]
     ) -> None:
         """Replace user-backed organization assignments."""
         await self._replace_organization_assignments(
@@ -164,7 +165,7 @@ class OAuth2ClientManagementSupport:
         )
 
     async def _replace_machine_organizations(
-        self, *, client_id: str, organization_ids: list[int]
+        self, *, client_id: UUID, organization_ids: list[int]
     ) -> None:
         """Replace machine-principal organization assignments."""
         await self._replace_organization_assignments(
@@ -174,7 +175,7 @@ class OAuth2ClientManagementSupport:
         )
 
     async def _update_client(
-        self, *, client_id: str, data: OAuth2ClientPersistenceUpdateDTO
+        self, *, client_id: UUID, data: OAuth2ClientPersistenceUpdateDTO
     ) -> OAuth2ClientReadDTO:
         """Persist and return one complete mutable client representation."""
         row = await self.db_session.scalar(
@@ -184,6 +185,6 @@ class OAuth2ClientManagementSupport:
             .returning(OAuth2ClientDB)
         )
         if row is None:
-            raise OAuth2ClientAdminNotFoundError
+            raise OAuth2ClientManagementNotFoundError
         await self.db_session.flush()
         return OAuth2ClientReadDTO.model_validate(row)

@@ -9,12 +9,11 @@ import httpx
 import pytest
 from app.db.models.oauth2_client import OAuth2ClientDB
 from app.db.models.oauth2_session import OAuth2SessionDB
-from app.db.models.oauth2_token_pair import OAuth2TokenPairDB
+from app.db.models.oauth2_token_state import OAuth2TokenStateDB
 from app.db.models.user import UserDB, UserEmailDB
 from app.identity.users.enums import UserEmailStatus
 from app.oauth2.settings import OAuth2Settings
-from app.oauth2.tokens.dtos import TokenPairUpdateDTO
-from app.public_ids import PUBLIC_ID_PAYLOAD_PATTERN
+from app.oauth2.tokens.dtos import OAuth2TokenStateUpdateDTO
 from fastapi import FastAPI, status
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
@@ -26,7 +25,7 @@ from tests.fixtures.oauth2 import (
     add_oauth2_required_context_route,
     authorization_code_from_redirect,
     CODE_VERIFIER,
-    count_token_pairs,
+    count_token_states,
     create_other_public_client,
     create_public_authorization_code_client,
     decode_unverified_jwt_payload,
@@ -35,6 +34,7 @@ from tests.fixtures.oauth2 import (
     request_user_token,
     SHA256_HEX_LENGTH,
 )
+from tests.identifiers import deterministic_uuid, UUID4_PATTERN
 
 
 pytestmark = pytest.mark.api
@@ -47,6 +47,7 @@ async def test_bearer_auth_rejects_malformed_encoded_header(
     client: httpx.AsyncClient,
 ) -> None:
     """Translate a malformed JWT header into the safe bearer error response."""
+
     add_oauth2_required_context_route(app)
 
     response = await client.get(
@@ -87,14 +88,14 @@ async def test_token_store_hashes_access_and_refresh_tokens(
     body = response.json()
 
     async with app.state.core_session_factory() as db_session:
-        token_pair = await db_session.scalar(select(OAuth2TokenPairDB))
+        token_state = await db_session.scalar(select(OAuth2TokenStateDB))
         oauth2_session = await db_session.scalar(select(OAuth2SessionDB))
 
-    assert token_pair is not None
-    assert token_pair.access_token_hash != body["access_token"]
-    assert token_pair.refresh_token_hash != body["refresh_token"]
-    assert len(token_pair.access_token_hash) == SHA256_HEX_LENGTH
-    assert len(token_pair.refresh_token_hash) == SHA256_HEX_LENGTH
+    assert token_state is not None
+    assert token_state.access_token_hash != body["access_token"]
+    assert token_state.refresh_token_hash != body["refresh_token"]
+    assert len(token_state.access_token_hash) == SHA256_HEX_LENGTH
+    assert len(token_state.refresh_token_hash) == SHA256_HEX_LENGTH
     assert oauth2_session is not None
     assert oauth2_session.grant_type == "authorization_code"
 
@@ -112,11 +113,11 @@ async def test_access_token_uses_public_jwt_claims(
     claims = decode_unverified_jwt_payload(response.json()["access_token"])
 
     assert isinstance(claims["sub"], str)
-    assert re.fullmatch(rf"usr_{PUBLIC_ID_PAYLOAD_PATTERN}", claims["sub"])
+    assert re.fullmatch(UUID4_PATTERN, claims["sub"])
     assert isinstance(claims["organization"], str)
-    assert re.fullmatch(rf"org_{PUBLIC_ID_PAYLOAD_PATTERN}", claims["organization"])
-    assert claims["aud"] == app.state.settings.oauth2.jwt_audience
-    assert claims["iss"] == app.state.settings.oauth2.jwt_issuer
+    assert re.fullmatch(UUID4_PATTERN, claims["organization"])
+    assert claims["aud"] == app.state.settings.oauth2.access_token_audience
+    assert claims["iss"] == app.state.settings.oauth2.issuer
     assert claims["scope"] == "read"
     assert "jti" in claims
     assert "email" not in claims
@@ -125,7 +126,7 @@ async def test_access_token_uses_public_jwt_claims(
 
 @pytest.mark.asyncio
 @pytest.mark.system
-async def test_refresh_token_rotates_persisted_token_pair(
+async def test_refresh_token_rotates_persisted_token_state(
     app: FastAPI,
     client: httpx.AsyncClient,
     verified_user_credentials: UserCredentials,
@@ -136,7 +137,7 @@ async def test_refresh_token_rotates_persisted_token_pair(
     original_pair = login_response.json()
     async with app.state.core_session_factory() as db_session:
         original_deadline = await db_session.scalar(
-            select(OAuth2TokenPairDB.refresh_expires_at)
+            select(OAuth2TokenStateDB.refresh_expires_at)
         )
 
     refresh_response = await client.post(
@@ -144,7 +145,7 @@ async def test_refresh_token_rotates_persisted_token_pair(
         data={
             "grant_type": "refresh_token",
             "refresh_token": original_pair["refresh_token"],
-            "client_id": "test-user-client",
+            "client_id": str(deterministic_uuid("test-user-client")),
         },
     )
 
@@ -154,20 +155,20 @@ async def test_refresh_token_rotates_persisted_token_pair(
     assert refreshed_pair["refresh_token"] != original_pair["refresh_token"]
     async with app.state.core_session_factory() as db_session:
         rotated_deadline = await db_session.scalar(
-            select(OAuth2TokenPairDB.refresh_expires_at)
+            select(OAuth2TokenStateDB.refresh_expires_at)
         )
     assert rotated_deadline == original_deadline
 
 
 @pytest.mark.asyncio
 @pytest.mark.negative
-async def test_refresh_token_does_not_mask_internal_value_error(
+async def test_refresh_token_hides_internal_value_error(
     app: FastAPI,
     client: httpx.AsyncClient,
     verified_user_credentials: UserCredentials,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Let unexpected token construction defects escape OAuth2 error mapping."""
+    """Return a safe protocol error for unexpected token construction defects."""
     login_response = await request_user_token(app, client, verified_user_credentials)
     refresh_token = login_response.json()["refresh_token"]
 
@@ -176,20 +177,21 @@ async def test_refresh_token_does_not_mask_internal_value_error(
         raise ValueError(msg)
 
     monkeypatch.setattr(
-        refresh_workflow.TokenIssuanceService,
-        "create_rotation_tokens",
+        "app.oauth2.tokens.refresh.TokenIssuanceService.create_rotation_tokens",
         fail_rotation,
     )
 
-    with pytest.raises(ValueError, match="unexpected rotation defect"):
-        await client.post(
-            "/oauth2/token",
-            data={
-                "grant_type": "refresh_token",
-                "refresh_token": refresh_token,
-                "client_id": "test-user-client",
-            },
-        )
+    response = await client.post(
+        "/oauth2/token",
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id": str(deterministic_uuid("test-user-client")),
+        },
+    )
+
+    assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    assert response.json() == {"error": "server_error"}
 
 
 @pytest.mark.asyncio
@@ -212,7 +214,7 @@ async def test_refresh_token_for_client_bound_pair_requires_client_authenticatio
             "grant_type": "authorization_code",
             "code": authorization_code_from_redirect(authorize_response),
             "redirect_uri": "https://client.example/callback",
-            "client_id": "public-client",
+            "client_id": str(deterministic_uuid("public-client")),
             "code_verifier": CODE_VERIFIER,
         },
     )
@@ -230,7 +232,7 @@ async def test_refresh_token_for_client_bound_pair_requires_client_authenticatio
         data={
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
-            "client_id": "public-client",
+            "client_id": str(deterministic_uuid("public-client")),
         },
     )
 
@@ -256,7 +258,7 @@ async def test_refresh_token_rejects_reused_rotated_token(
         data={
             "grant_type": "refresh_token",
             "refresh_token": original_refresh_token,
-            "client_id": "test-user-client",
+            "client_id": str(deterministic_uuid("test-user-client")),
         },
     )
     assert refresh_response.status_code == status.HTTP_200_OK
@@ -268,7 +270,7 @@ async def test_refresh_token_rejects_reused_rotated_token(
         data={
             "grant_type": "refresh_token",
             "refresh_token": original_refresh_token,
-            "client_id": "test-user-client",
+            "client_id": str(deterministic_uuid("test-user-client")),
         },
     )
 
@@ -276,7 +278,7 @@ async def test_refresh_token_rejects_reused_rotated_token(
     assert reused_response.json()["error"] == "invalid_grant"
     async with app.state.core_session_factory() as db_session:
         token_count = await db_session.scalar(
-            select(func.count()).select_from(OAuth2TokenPairDB)
+            select(func.count()).select_from(OAuth2TokenStateDB)
         )
         ended_at = await db_session.scalar(select(OAuth2SessionDB.ended_at))
 
@@ -296,12 +298,12 @@ async def test_refresh_cas_loser_does_not_revoke_successful_rotation(
     verified_user_credentials: UserCredentials,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Assert a compare-and-swap loser does not revoke the winning token pair."""
+    """Assert a compare-and-swap loser does not revoke the winning token state."""
     login_response = await request_user_token(app, client, verified_user_credentials)
     assert login_response.status_code == status.HTTP_200_OK
     original_refresh_token = login_response.json()["refresh_token"]
 
-    original_update = refresh_workflow.rotate_token_pair
+    original_update = refresh_workflow.rotate_token_state
     concurrent_request_count = 2
     update_arrivals = 0
 
@@ -311,7 +313,7 @@ async def test_refresh_cas_loser_does_not_revoke_successful_rotation(
         settings: OAuth2Settings,
         session_id: int,
         current_refresh_hash: str,
-        data: TokenPairUpdateDTO,
+        data: OAuth2TokenStateUpdateDTO,
     ) -> bool:
         nonlocal update_arrivals
         update_arrivals += 1
@@ -325,11 +327,11 @@ async def test_refresh_cas_loser_does_not_revoke_successful_rotation(
             current_refresh_hash=current_refresh_hash,
         )
 
-    monkeypatch.setattr(refresh_workflow, "rotate_token_pair", coordinated_update)
+    monkeypatch.setattr(refresh_workflow, "rotate_token_state", coordinated_update)
     request_data = {
         "grant_type": "refresh_token",
         "refresh_token": original_refresh_token,
-        "client_id": "test-user-client",
+        "client_id": str(deterministic_uuid("test-user-client")),
     }
 
     responses = await asyncio.gather(
@@ -350,7 +352,7 @@ async def test_refresh_cas_loser_does_not_revoke_successful_rotation(
         data={
             "grant_type": "refresh_token",
             "refresh_token": successful_response.json()["refresh_token"],
-            "client_id": "test-user-client",
+            "client_id": str(deterministic_uuid("test-user-client")),
         },
     )
 
@@ -371,7 +373,7 @@ async def test_refresh_token_rejects_expired_refresh_token(
 
     async with app.state.core_session_factory() as db_session:
         await db_session.execute(
-            update(OAuth2TokenPairDB).values(
+            update(OAuth2TokenStateDB).values(
                 refresh_expires_at=datetime.now(UTC) - timedelta(seconds=1)
             )
         )
@@ -382,13 +384,13 @@ async def test_refresh_token_rejects_expired_refresh_token(
         data={
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
-            "client_id": "test-user-client",
+            "client_id": str(deterministic_uuid("test-user-client")),
         },
     )
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
     assert response.json()["error"] == "invalid_grant"
-    assert await count_token_pairs(app) == 0
+    assert await count_token_states(app) == 0
     async with app.state.core_session_factory() as db_session:
         ended_at = await db_session.scalar(select(OAuth2SessionDB.ended_at))
     assert ended_at is not None
@@ -407,11 +409,11 @@ async def test_refresh_token_state_rejects_missing_refresh_expiry(
     async with app.state.core_session_factory() as db_session:
         with pytest.raises(IntegrityError, match="refresh_pair"):
             await db_session.execute(
-                update(OAuth2TokenPairDB).values(refresh_expires_at=None)
+                update(OAuth2TokenStateDB).values(refresh_expires_at=None)
             )
         await db_session.rollback()
 
-    assert await count_token_pairs(app) == 1
+    assert await count_token_states(app) == 1
 
 
 @pytest.mark.asyncio
@@ -459,7 +461,7 @@ async def test_refresh_token_rejects_blocked_user(
         data={
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
-            "client_id": "test-user-client",
+            "client_id": str(deterministic_uuid("test-user-client")),
         },
     )
 
@@ -488,7 +490,7 @@ async def test_refresh_token_rejects_wrong_client(
             "grant_type": "authorization_code",
             "code": authorization_code_from_redirect(authorize_response),
             "redirect_uri": "https://client.example/callback",
-            "client_id": "public-client",
+            "client_id": str(deterministic_uuid("public-client")),
             "code_verifier": CODE_VERIFIER,
         },
     )
@@ -498,7 +500,7 @@ async def test_refresh_token_rejects_wrong_client(
         data={
             "grant_type": "refresh_token",
             "refresh_token": token_response.json()["refresh_token"],
-            "client_id": "other-public-client",
+            "client_id": str(deterministic_uuid("other-public-client")),
         },
     )
 
@@ -526,14 +528,14 @@ async def test_refresh_token_rejects_inactive_client(
             "grant_type": "authorization_code",
             "code": authorization_code_from_redirect(authorize_response),
             "redirect_uri": "https://client.example/callback",
-            "client_id": "public-client",
+            "client_id": str(deterministic_uuid("public-client")),
             "code_verifier": CODE_VERIFIER,
         },
     )
     async with app.state.core_session_factory() as db_session:
         await db_session.execute(
             update(OAuth2ClientDB)
-            .where(OAuth2ClientDB.client_id == "public-client")
+            .where(OAuth2ClientDB.client_id == deterministic_uuid("public-client"))
             .values(is_active=False)
         )
         await db_session.commit()
@@ -543,7 +545,7 @@ async def test_refresh_token_rejects_inactive_client(
         data={
             "grant_type": "refresh_token",
             "refresh_token": token_response.json()["refresh_token"],
-            "client_id": "public-client",
+            "client_id": str(deterministic_uuid("public-client")),
         },
     )
 
@@ -599,7 +601,7 @@ async def test_bearer_auth_rejects_inactive_user_client(
     async with app.state.core_session_factory() as db_session:
         await db_session.execute(
             update(OAuth2ClientDB)
-            .where(OAuth2ClientDB.client_id == "test-user-client")
+            .where(OAuth2ClientDB.client_id == deterministic_uuid("test-user-client"))
             .values(is_active=False)
         )
         await db_session.commit()
@@ -607,6 +609,34 @@ async def test_bearer_auth_rejects_inactive_user_client(
     response = await client.get(
         "/test/oauth2/required-context",
         headers={"Authorization": f"Bearer {access_token}"},
+    )
+
+    assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+
+@pytest.mark.asyncio
+@pytest.mark.negative
+async def test_bearer_auth_rejects_token_and_session_client_mismatch(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    verified_user_credentials: UserCredentials,
+) -> None:
+    """Bind signed client claims to the client stored with the token family."""
+    add_oauth2_required_context_route(app)
+    token_response = await request_user_token(app, client, verified_user_credentials)
+    assert token_response.status_code == status.HTTP_200_OK
+    await create_other_public_client(app)
+    async with app.state.core_session_factory() as db_session:
+        await db_session.execute(
+            update(OAuth2SessionDB).values(
+                client_id=deterministic_uuid("other-public-client")
+            )
+        )
+        await db_session.commit()
+
+    response = await client.get(
+        "/test/oauth2/required-context",
+        headers={"Authorization": f"Bearer {token_response.json()['access_token']}"},
     )
 
     assert response.status_code == status.HTTP_401_UNAUTHORIZED
@@ -626,7 +656,7 @@ async def test_bearer_auth_rejects_access_jti_mismatch(
     access_token = login_response.json()["access_token"]
     async with app.state.core_session_factory() as db_session:
         await db_session.execute(
-            update(OAuth2TokenPairDB).values(access_jti="wrong-jti")
+            update(OAuth2TokenStateDB).values(access_jti="wrong-jti")
         )
         await db_session.commit()
 

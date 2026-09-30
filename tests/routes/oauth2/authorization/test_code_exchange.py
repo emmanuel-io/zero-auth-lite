@@ -14,13 +14,12 @@ from app.db.models.user import UserDB
 from fastapi import FastAPI, status
 from sqlalchemy import select, update
 
-from app.oauth2.authorization import code_exchange as code_exchange_workflow
 from tests.fixtures.auth import current_user_id_for_email, UserCredentials
 from tests.fixtures.oauth2 import (
     authorization_code_from_redirect,
     BEARER_TOKEN_TYPE,
     CODE_VERIFIER,
-    count_token_pairs,
+    count_token_states,
     create_confidential_authorization_code_client,
     create_public_authorization_code_client,
     create_public_oidc_client,
@@ -30,6 +29,7 @@ from tests.fixtures.oauth2 import (
     request_user_token,
 )
 from tests.fixtures.settings import app_settings
+from tests.identifiers import deterministic_uuid
 
 
 pytestmark = pytest.mark.api
@@ -37,12 +37,13 @@ pytestmark = pytest.mark.api
 
 @pytest.mark.asyncio
 @pytest.mark.system
-async def test_authorization_code_exchange_issues_token_pair(
+async def test_authorization_code_exchange_issues_token_state(
     app: FastAPI,
     client: httpx.AsyncClient,
     verified_user_credentials: UserCredentials,
 ) -> None:
     """Assert authorization code + PKCE can be exchanged for bearer tokens."""
+
     await create_public_authorization_code_client(app)
     login_response = await login_browser_session(client, verified_user_credentials)
     assert login_response.status_code == status.HTTP_204_NO_CONTENT
@@ -57,7 +58,7 @@ async def test_authorization_code_exchange_issues_token_pair(
             "grant_type": "authorization_code",
             "code": authorization_code_from_redirect(authorize_response),
             "redirect_uri": "https://client.example/callback",
-            "client_id": "public-client",
+            "client_id": str(deterministic_uuid("public-client")),
             "code_verifier": CODE_VERIFIER,
         },
     )
@@ -68,20 +69,20 @@ async def test_authorization_code_exchange_issues_token_pair(
     assert body["access_token"]
     assert body["refresh_token"]
     claims = decode_unverified_jwt_payload(body["access_token"])
-    assert claims["client_id"] == "public-client"
+    assert claims["client_id"] == str(deterministic_uuid("public-client"))
     assert claims["scope"] == "read"
-    assert await count_token_pairs(app) == 1
+    assert await count_token_states(app) == 1
 
 
 @pytest.mark.asyncio
 @pytest.mark.negative
-async def test_authorization_code_exchange_does_not_mask_internal_value_error(
+async def test_authorization_code_exchange_hides_internal_value_error(
     app: FastAPI,
     client: httpx.AsyncClient,
     verified_user_credentials: UserCredentials,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Let unexpected issuance defects escape the OAuth2 error mapping."""
+    """Return a safe protocol error for unexpected issuance defects."""
     await create_public_authorization_code_client(app)
     login_response = await login_browser_session(client, verified_user_credentials)
     authorize_response = await request_authorization_code(
@@ -93,22 +94,24 @@ async def test_authorization_code_exchange_does_not_mask_internal_value_error(
         raise ValueError(msg)
 
     monkeypatch.setattr(
-        code_exchange_workflow.TokenIssuanceService,
-        "issue_new_session",
+        "app.oauth2.authorization.code_exchange.TokenIssuanceService.issue_new_session",
         fail_issuance,
     )
 
-    with pytest.raises(ValueError, match="unexpected issuance defect"):
-        await client.post(
-            "/oauth2/token",
-            data={
-                "grant_type": "authorization_code",
-                "code": authorization_code_from_redirect(authorize_response),
-                "redirect_uri": "https://client.example/callback",
-                "client_id": "public-client",
-                "code_verifier": CODE_VERIFIER,
-            },
-        )
+    response = await client.post(
+        "/oauth2/token",
+        data={
+            "grant_type": "authorization_code",
+            "code": authorization_code_from_redirect(authorize_response),
+            "redirect_uri": "https://client.example/callback",
+            "client_id": str(deterministic_uuid("public-client")),
+            "code_verifier": CODE_VERIFIER,
+        },
+    )
+
+    assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    assert response.json() == {"error": "server_error"}
+    assert response.headers["cache-control"] == "no-store"
 
 
 @pytest.mark.asyncio
@@ -127,7 +130,7 @@ async def test_authorization_code_exchange_rejects_openid_when_oidc_disabled(
     response = await request_authorization_code(
         client,
         login_response=login_response,
-        client_id="oidc-client",
+        client_id=deterministic_uuid("oidc-client"),
         redirect_uri="https://oidc.example/callback",
         scope="openid email",
     )
@@ -157,7 +160,7 @@ async def test_authorization_code_exchange_issues_id_token_when_oidc_enabled(
     authorize_response = await request_authorization_code(
         client,
         login_response=login_response,
-        client_id="oidc-client",
+        client_id=deterministic_uuid("oidc-client"),
         redirect_uri="https://oidc.example/callback",
         scope="openid email profile",
     )
@@ -169,7 +172,7 @@ async def test_authorization_code_exchange_issues_id_token_when_oidc_enabled(
             "grant_type": "authorization_code",
             "code": authorization_code_from_redirect(authorize_response),
             "redirect_uri": "https://oidc.example/callback",
-            "client_id": "oidc-client",
+            "client_id": str(deterministic_uuid("oidc-client")),
             "code_verifier": CODE_VERIFIER,
         },
     )
@@ -180,7 +183,7 @@ async def test_authorization_code_exchange_issues_id_token_when_oidc_enabled(
     access_claims = decode_unverified_jwt_payload(body["access_token"])
     id_claims = decode_unverified_jwt_payload(body["id_token"])
     assert access_claims["scope"] == "openid email profile"
-    assert id_claims["aud"] == "oidc-client"
+    assert id_claims["aud"] == str(deterministic_uuid("oidc-client"))
     assert id_claims["sub"] == access_claims["sub"]
     assert id_claims["email"] == verified_user_credentials.email
     assert id_claims["auth_time"] == int(authenticated_at.timestamp())
@@ -201,7 +204,7 @@ async def test_userinfo_requires_oidc_and_openid_scope(
     authorize_response = await request_authorization_code(
         client,
         login_response=login_response,
-        client_id="oidc-client",
+        client_id=deterministic_uuid("oidc-client"),
         redirect_uri="https://oidc.example/callback",
         scope="openid email",
     )
@@ -211,7 +214,7 @@ async def test_userinfo_requires_oidc_and_openid_scope(
             "grant_type": "authorization_code",
             "code": authorization_code_from_redirect(authorize_response),
             "redirect_uri": "https://oidc.example/callback",
-            "client_id": "oidc-client",
+            "client_id": str(deterministic_uuid("oidc-client")),
             "code_verifier": CODE_VERIFIER,
         },
     )
@@ -273,11 +276,11 @@ async def test_authorization_code_exchange_supports_confidential_client_basic_au
     authorize_response = await request_authorization_code(
         client,
         login_response=login_response,
-        client_id="confidential-client",
+        client_id=deterministic_uuid("confidential-client"),
         redirect_uri="https://confidential.example/callback",
     )
     basic_payload = base64.b64encode(
-        f"confidential-client:{raw_secret}".encode()
+        f"{deterministic_uuid('confidential-client')}:{raw_secret}".encode()
     ).decode()
 
     response = await client.post(
@@ -293,7 +296,7 @@ async def test_authorization_code_exchange_supports_confidential_client_basic_au
 
     assert response.status_code == status.HTTP_200_OK
     claims = decode_unverified_jwt_payload(response.json()["access_token"])
-    assert claims["client_id"] == "confidential-client"
+    assert claims["client_id"] == str(deterministic_uuid("confidential-client"))
 
 
 @pytest.mark.asyncio
@@ -310,7 +313,7 @@ async def test_authorization_code_exchange_rejects_missing_confidential_secret(
     authorize_response = await request_authorization_code(
         client,
         login_response=login_response,
-        client_id="confidential-client",
+        client_id=deterministic_uuid("confidential-client"),
         redirect_uri="https://confidential.example/callback",
     )
 
@@ -320,7 +323,7 @@ async def test_authorization_code_exchange_rejects_missing_confidential_secret(
             "grant_type": "authorization_code",
             "code": authorization_code_from_redirect(authorize_response),
             "redirect_uri": "https://confidential.example/callback",
-            "client_id": "confidential-client",
+            "client_id": str(deterministic_uuid("confidential-client")),
             "code_verifier": CODE_VERIFIER,
         },
     )
@@ -349,7 +352,7 @@ async def test_authorization_code_exchange_rejects_wrong_redirect_uri(
             "grant_type": "authorization_code",
             "code": authorization_code_from_redirect(authorize_response),
             "redirect_uri": "https://client.example/wrong",
-            "client_id": "public-client",
+            "client_id": str(deterministic_uuid("public-client")),
             "code_verifier": CODE_VERIFIER,
         },
     )
@@ -385,7 +388,7 @@ async def test_authorization_code_exchange_rejects_expired_code(
             "grant_type": "authorization_code",
             "code": authorization_code_from_redirect(authorize_response),
             "redirect_uri": "https://client.example/callback",
-            "client_id": "public-client",
+            "client_id": str(deterministic_uuid("public-client")),
             "code_verifier": CODE_VERIFIER,
         },
     )
@@ -423,7 +426,7 @@ async def test_authorization_code_exchange_rejects_blocked_user(
             "grant_type": "authorization_code",
             "code": authorization_code_from_redirect(authorize_response),
             "redirect_uri": "https://client.example/callback",
-            "client_id": "public-client",
+            "client_id": str(deterministic_uuid("public-client")),
             "code_verifier": CODE_VERIFIER,
         },
     )
@@ -452,7 +455,7 @@ async def test_authorization_code_exchange_rejects_reuse(
         "grant_type": "authorization_code",
         "code": raw_code,
         "redirect_uri": "https://client.example/callback",
-        "client_id": "public-client",
+        "client_id": str(deterministic_uuid("public-client")),
         "code_verifier": CODE_VERIFIER,
     }
 
@@ -485,7 +488,7 @@ async def test_authorization_code_exchange_rejects_bad_pkce_verifier(
             "grant_type": "authorization_code",
             "code": authorization_code_from_redirect(authorize_response),
             "redirect_uri": "https://client.example/callback",
-            "client_id": "public-client",
+            "client_id": str(deterministic_uuid("public-client")),
             "code_verifier": f"{CODE_VERIFIER}x",
         },
     )

@@ -1,0 +1,36 @@
+{% extends "management/base.html" %}
+{% block title %}Manage sessions · {{ organization.name }} · Zero Auth Lite{% endblock %}
+{% block content %}
+  <header class="page-header">
+    <p class="eyebrow">Server organization</p>
+    <h1>Manage sessions</h1>
+    <p class="muted">{{ organization.name }} · {{ organization.id }}</p>
+  </header>
+  <div class="management-grid">
+    <section class="feature-card danger-panel">
+      <div>
+        <p class="feature-card__label">Browser authentication</p>
+        <h2>Delete browser sessions</h2>
+        <p>Permanently delete browser sessions belonging to users in this organization. OAuth2 sessions remain active.</p>
+      </div>
+      <a class="button button--danger" href="/management/operator/organizations/{{ organization.id }}/sessions/browser/delete">Delete browser sessions</a>
+    </section>
+    <section class="feature-card danger-panel">
+      <div>
+        <p class="feature-card__label">OAuth2 sessions</p>
+        <h2>Delete OAuth2 sessions</h2>
+        <p>Permanently delete OAuth2 session families and their tokens. Browser sessions remain active.</p>
+      </div>
+      <a class="button button--danger" href="/management/operator/organizations/{{ organization.id }}/sessions/oauth2/delete">Delete OAuth2 sessions</a>
+    </section>
+    <section class="feature-card danger-panel">
+      <div>
+        <p class="feature-card__label">All authentication</p>
+        <h2>Revoke all sessions</h2>
+        <p>End both browser and OAuth2 sessions attributed to this organization.</p>
+      </div>
+      <a class="button button--danger" href="/management/operator/organizations/{{ organization.id }}/sessions/revoke">Revoke all sessions</a>
+    </section>
+  </div>
+  <a class="text-link" href="/management/operator/organizations">← Back to organizations</a>
+{% endblock %}

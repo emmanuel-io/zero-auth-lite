@@ -10,14 +10,7 @@ from pathlib import Path
 def serialized_bootstrap(
     lock_directory: Path, *, lock_filename: str = "initial-operator.lock"
 ) -> Iterator[None]:
-    """Serialize bootstrap work across processes sharing one runtime directory.
-
-    Args:
-        lock_directory: Ephemeral directory shared by application workers.
-        lock_filename: File name identifying the serialized local operation.
-
-    Yields:
-        Control while this process owns the bootstrap lock.
+    """Serialize bootstrap work with a named lock in a shared runtime directory.
 
     Raises:
         RuntimeError: If the lock directory or file cannot be used.

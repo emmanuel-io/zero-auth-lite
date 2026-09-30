@@ -1,27 +1,31 @@
 """Tests for authentication context dependencies."""
 
+import logging
 from http.cookies import SimpleCookie
 from types import SimpleNamespace
 
 import app.security.authentication as security_authentication
 import pytest
-from app.enums import Role
-from app.errors import UnauthorizedError
+from app.core.errors.common import UnauthorizedError
 from app.oauth2.errors import OAuth2AccessTokenInvalidError
 from app.oauth2.settings import OAuth2Settings
 from app.security.authentication import (
-    get_current_principal_context,
+    get_current_actor_context,
     get_current_user_context,
-    get_optional_current_principal_context,
+    get_optional_current_actor_context,
     get_optional_current_user_context,
 )
-from app.security.dtos import OAuth2PrincipalContext, OAuth2UserPrincipalContext
+from app.security.principals import OAuth2PrincipalContext, OAuth2UserPrincipalContext
+from app.security.roles import Role
 from app.settings.root import Settings
 from starlette.requests import Request
+
+from tests.identifiers import deterministic_uuid, PublicId
 
 
 pytestmark = pytest.mark.unit
 TEST_OAUTH2_SESSION_ID = 3
+EXPECTED_INVALID_BEARER_LOG_COUNT = 2
 
 
 class FakeOAuth2Service:
@@ -46,12 +50,14 @@ class FakeOAuth2Service:
         return OAuth2UserPrincipalContext(
             user_id=1,
             organization_id=2,
-            session_id=TEST_OAUTH2_SESSION_ID,
-            client_id="client",
+            oauth2_session_id=TEST_OAUTH2_SESSION_ID,
+            client_id=deterministic_uuid("client"),
+            user_public_id=PublicId(1),
+            organization_public_id=PublicId(2),
             roles=frozenset({Role.ORGANIZATION_ADMIN}),
         )
 
-    async def get_current_principal_context(
+    async def get_current_oauth2_principal_context(
         self,
         *,
         access_token: str,
@@ -63,9 +69,11 @@ class FakeOAuth2Service:
             raise OAuth2AccessTokenInvalidError
         return OAuth2UserPrincipalContext(
             organization_id=2,
-            session_id=3,
+            oauth2_session_id=3,
             user_id=1,
-            client_id="client",
+            client_id=deterministic_uuid("client"),
+            user_public_id=PublicId(1),
+            organization_public_id=PublicId(2),
             scopes=frozenset({"read"}),
         )
 
@@ -118,8 +126,8 @@ async def test_optional_current_user_context_uses_bearer_or_oauth2_credentials(
     service = FakeOAuth2Service()
     first = await get_optional_current_user_context(
         request=request,
-        db_session=object(),  # type: ignore[arg-type]
-        bearer_principal_service=service,  # type: ignore[arg-type]
+        db_session=object(),  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+        bearer_principal_service=service,  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
         oauth2_settings=OAuth2Settings(),
         settings=Settings(),
         bearer_creds=bearer_credentials("bearer-token"),
@@ -127,18 +135,18 @@ async def test_optional_current_user_context_uses_bearer_or_oauth2_credentials(
     )
     second = await get_optional_current_user_context(
         request=request,
-        db_session=object(),  # type: ignore[arg-type]
-        bearer_principal_service=service,  # type: ignore[arg-type]
+        db_session=object(),  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+        bearer_principal_service=service,  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
         oauth2_settings=OAuth2Settings(),
         settings=Settings(),
         bearer_creds=None,
         oauth2_creds="oauth-token",
     )
 
-    assert first is not None
-    assert first.session_id == TEST_OAUTH2_SESSION_ID
-    assert second is not None
-    assert second.session_id == TEST_OAUTH2_SESSION_ID
+    assert isinstance(first, OAuth2UserPrincipalContext)
+    assert first.oauth2_session_id == TEST_OAUTH2_SESSION_ID
+    assert isinstance(second, OAuth2UserPrincipalContext)
+    assert second.oauth2_session_id == TEST_OAUTH2_SESSION_ID
     assert service.user_access_tokens == ["bearer-token", "oauth-token"]
 
 
@@ -146,15 +154,17 @@ async def test_optional_current_user_context_uses_bearer_or_oauth2_credentials(
 @pytest.mark.negative
 async def test_optional_current_contexts_reject_invalid_bearer(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Assert invalid bearer tokens are normalized to UnauthorizedError."""
+    """Normalize and log invalid bearer tokens once without a traceback."""
     monkeypatch.setattr(security_authentication, "get_verify_keys", lambda _: "key")
+    caplog.set_level(logging.WARNING, logger="app.security.authentication")
 
     with pytest.raises(UnauthorizedError):
         await get_optional_current_user_context(
             request=make_request(method="GET"),
-            db_session=object(),  # type: ignore[arg-type]
-            bearer_principal_service=FakeOAuth2Service(  # type: ignore[arg-type]
+            db_session=object(),  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+            bearer_principal_service=FakeOAuth2Service(  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
                 fail=True
             ),
             oauth2_settings=OAuth2Settings(),
@@ -164,41 +174,72 @@ async def test_optional_current_contexts_reject_invalid_bearer(
         )
 
     with pytest.raises(UnauthorizedError):
-        await get_optional_current_principal_context(
+        await get_optional_current_actor_context(
             request=make_request(method="GET"),
-            bearer_principal_service=FakeOAuth2Service(  # type: ignore[arg-type]
+            db_session=object(),  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+            bearer_principal_service=FakeOAuth2Service(  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
                 fail=True
             ),
             oauth2_settings=OAuth2Settings(),
+            settings=Settings(),
             bearer_creds=bearer_credentials("bad"),
             oauth2_creds=None,
         )
 
+    records = [
+        record
+        for record in caplog.records
+        if record.name == "app.security.authentication"
+    ]
+    assert len(records) == EXPECTED_INVALID_BEARER_LOG_COUNT
+    assert all(
+        record.getMessage()
+        == "event=bearer_authentication outcome=failure reason=invalid_token"
+        for record in records
+    )
+    assert all(record.exc_info is None for record in records)
+
 
 @pytest.mark.asyncio
-async def test_optional_current_principal_context_uses_oauth2_credentials(
+async def test_optional_current_actor_context_uses_oauth2_credentials(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Assert optional principal context resolves OAuth2 popup credentials."""
     monkeypatch.setattr(security_authentication, "get_verify_keys", lambda _: "key")
 
-    context = await get_optional_current_principal_context(
+    context = await get_optional_current_actor_context(
         request=make_request(method="GET"),
-        bearer_principal_service=FakeOAuth2Service(),  # type: ignore[arg-type]
+        db_session=object(),  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+        bearer_principal_service=FakeOAuth2Service(),  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
         oauth2_settings=OAuth2Settings(),
+        settings=Settings(),
         bearer_creds=None,
         oauth2_creds="oauth-token",
     )
 
     assert context is not None
+    assert isinstance(context, OAuth2UserPrincipalContext)
     assert context.user_id == 1
 
 
 @pytest.mark.asyncio
 async def test_required_context_dependencies_raise_when_missing() -> None:
     """Assert required context wrappers reject missing authentication."""
-    with pytest.raises(UnauthorizedError):
-        await get_current_user_context(None)  # type: ignore[arg-type]
+    with pytest.raises(UnauthorizedError) as exc_info:
+        await get_current_user_context(None, Settings())
+
+    assert exc_info.value.headers == {"WWW-Authenticate": "Bearer, Session"}
 
     with pytest.raises(UnauthorizedError):
-        await get_current_principal_context(None)  # type: ignore[arg-type]
+        await get_current_actor_context(None, Settings())
+
+
+@pytest.mark.asyncio
+async def test_required_user_context_advertises_only_enabled_session_auth() -> None:
+    """Do not advertise disabled Bearer authentication to API clients."""
+    settings = Settings(oauth2=OAuth2Settings.disabled())
+
+    with pytest.raises(UnauthorizedError) as exc_info:
+        await get_current_user_context(None, settings)
+
+    assert exc_info.value.headers == {"WWW-Authenticate": "Session"}

@@ -5,7 +5,7 @@ from typing import ClassVar
 from fastapi import status
 
 from app.core.errors.base import AppError
-from app.errors import DataConflictError
+from app.core.errors.common import DataConflictError
 
 
 class DatabaseBusyError(AppError):

@@ -13,5 +13,6 @@ OrganizationName = Annotated[
         strip_whitespace=True,
         min_length=1,
         max_length=OrganizationSpecs.NAME_LENGTH_MAX,
+        pattern=r"^[^\r\n]*$",
     ),
 ]

@@ -6,18 +6,11 @@ from typing import Annotated
 
 from fastapi import Depends
 
-from app.enums import Role
-from app.errors import ForbiddenOperationError
-from app.security.authentication import (
-    CurrentUserContextDep,
-    OAuth2PrincipalContextDep,
-)
-from app.security.dtos import (
-    AuthMethod,
-    OAuth2PrincipalContext,
-    UserPrincipalContext,
-)
+from app.core.errors.common import ForbiddenOperationError
+from app.security.authentication import CurrentUserContextDep
 from app.security.permissions import Permission
+from app.security.principals import UserPrincipalContext
+from app.security.roles import Role
 
 
 class PermissionMode(StrEnum):
@@ -77,51 +70,13 @@ def require_permissions(
         """Validate required permissions for the current principal."""
         if not required:
             return user_ctx
-        permissions = user_ctx.permissions
-        if user_ctx.auth_method == AuthMethod.OAUTH2:
-            permissions = frozenset(
-                permission
-                for permission in permissions
-                if permission.value in user_ctx.scopes
-            )
         allowed = (
-            bool(required & permissions)
+            bool(required & user_ctx.permissions)
             if mode == PermissionMode.ANY
-            else required <= permissions
+            else required <= user_ctx.permissions
         )
         if not allowed:
             raise ForbiddenOperationError
         return user_ctx
 
     return dependency
-
-
-def require_oauth2_scopes(
-    *required_scopes: str,
-) -> Callable[[OAuth2PrincipalContext], Awaitable[OAuth2PrincipalContext]]:
-    """Return a dependency that requires OAuth2 bearer scopes."""
-
-    async def dependency(
-        principal_ctx: OAuth2PrincipalContextDep,
-    ) -> OAuth2PrincipalContext:
-        """Validate required OAuth2 scopes for the current principal."""
-        missing_scopes = set(required_scopes) - principal_ctx.scopes
-        if missing_scopes:
-            raise ForbiddenOperationError
-        return principal_ctx
-
-    return dependency
-
-
-async def get_current_operator_context(
-    user_ctx: CurrentUserContextDep,
-) -> UserPrincipalContext:
-    """Restrict access to control-plane operators only."""
-    if not user_ctx.is_operator:
-        raise ForbiddenOperationError
-    return user_ctx
-
-
-CurrentOperatorContextDep = Annotated[
-    UserPrincipalContext, Depends(get_current_operator_context)
-]

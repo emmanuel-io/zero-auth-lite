@@ -2,15 +2,16 @@
 
 from fastapi import APIRouter
 
+from app.http_paths import OAUTH2_PREFIX
 from app.oauth2.authorization.router import router as oauth2_authorize_router
 from app.oauth2.devices.router import router as oauth2_device_router
+from app.oauth2.metadata import create_oauth_metadata_router
 from app.oauth2.oidc.router import (
     create_oidc_discovery_router,
     router as oidc_router,
 )
-from app.oauth2.routers.discovery import create_oauth_metadata_router
-from app.oauth2.routers.jwks import router as oauth2_jwks_router
-from app.oauth2.routers.tokens import router as oauth2_token_router
+from app.oauth2.signing.router import router as oauth2_jwks_router
+from app.oauth2.tokens.router import router as oauth2_token_router
 from app.settings.root import Settings
 
 
@@ -19,7 +20,7 @@ def create_oauth2_router(settings: Settings) -> APIRouter:
     router = APIRouter()
     if not settings.oauth2.protocol_enabled:
         return router
-    protocol_router = APIRouter(prefix="/oauth2")
+    protocol_router = APIRouter(prefix=OAUTH2_PREFIX)
 
     router.include_router(create_oauth_metadata_router(settings.oauth2))
     if settings.oauth2.oidc_enabled:

@@ -25,6 +25,7 @@ from tests.fixtures.oauth2 import (
     request_user_token,
     SHA256_HEX_LENGTH,
 )
+from tests.identifiers import deterministic_uuid
 
 
 pytestmark = pytest.mark.api
@@ -36,11 +37,12 @@ async def test_authorize_rejects_oversized_protocol_state(
     client: httpx.AsyncClient,
 ) -> None:
     """Reject oversized state through the OAuth2 error boundary, not as 422."""
+
     response = await client.get(
         "/oauth2/authorize",
         params={
             "response_type": "code",
-            "client_id": "public-client",
+            "client_id": str(deterministic_uuid("public-client")),
             "redirect_uri": "https://client.example/callback",
             "state": "x" * (OAuth2Specs.STATE_LENGTH_MAX + 1),
             "code_challenge": create_s256_code_challenge(code_verifier=CODE_VERIFIER),
@@ -50,6 +52,21 @@ async def test_authorize_rejects_oversized_protocol_state(
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
     assert response.json()["error"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+@pytest.mark.negative
+async def test_authorize_rejects_repeated_query_parameter(
+    client: httpx.AsyncClient,
+) -> None:
+    """Reject ambiguous authorization parameters before redirect validation."""
+    response = await client.get(
+        "/oauth2/authorize",
+        params=[("client_id", "one"), ("client_id", "two")],
+    )
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.json() == {"error": "invalid_request"}
 
 
 @pytest.mark.asyncio
@@ -104,7 +121,7 @@ async def test_authorize_ignores_oauth2_bearer_and_starts_browser_login(
         "/oauth2/authorize",
         params={
             "response_type": "code",
-            "client_id": "public-client",
+            "client_id": str(deterministic_uuid("public-client")),
             "redirect_uri": "https://client.example/callback",
             "scope": "read",
             "state": "state-value",
@@ -117,6 +134,8 @@ async def test_authorize_ignores_oauth2_bearer_and_starts_browser_login(
 
     assert response.status_code == status.HTTP_303_SEE_OTHER
     assert urlparse(response.headers["location"]).path == "/login"
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["pragma"] == "no-cache"
 
 
 @pytest.mark.asyncio
@@ -130,7 +149,7 @@ async def test_authorize_requires_consent_when_client_is_configured(
     async with app.state.core_session_factory() as db_session:
         await db_session.execute(
             update(OAuth2ClientDB)
-            .where(OAuth2ClientDB.client_id == "public-client")
+            .where(OAuth2ClientDB.client_id == deterministic_uuid("public-client"))
             .values(requires_consent=True)
         )
         await db_session.commit()
@@ -179,7 +198,7 @@ async def test_authorize_rejects_redirect_uri_mismatch(
         "/oauth2/authorize",
         params={
             "response_type": "code",
-            "client_id": "public-client",
+            "client_id": str(deterministic_uuid("public-client")),
             "redirect_uri": "https://evil.example/callback",
             "code_challenge": create_s256_code_challenge(code_verifier=CODE_VERIFIER),
             "code_challenge_method": "S256",
@@ -223,7 +242,7 @@ async def test_authorize_allows_global_client_for_user_from_another_organization
     async with app.state.core_session_factory() as db_session:
         db_session.add(
             OAuth2ClientDB(
-                client_id="other-organization-client",
+                client_id=deterministic_uuid("other-organization-client"),
                 client_secret=None,
                 name="Other Organization Client",
                 grant_types=["authorization_code"],
@@ -241,7 +260,7 @@ async def test_authorize_allows_global_client_for_user_from_another_organization
     response = await request_authorization_code(
         client,
         login_response=login_response,
-        client_id="other-organization-client",
+        client_id=deterministic_uuid("other-organization-client"),
         redirect_uri="https://other-organization.example/callback",
     )
 
@@ -264,7 +283,7 @@ async def test_authorize_rejects_missing_pkce(
         "/oauth2/authorize",
         params={
             "response_type": "code",
-            "client_id": "public-client",
+            "client_id": str(deterministic_uuid("public-client")),
             "redirect_uri": "https://client.example/callback",
         },
     )
@@ -288,7 +307,7 @@ async def test_authorize_rejects_unsupported_response_type(
         "/oauth2/authorize",
         params={
             "response_type": "token",
-            "client_id": "public-client",
+            "client_id": str(deterministic_uuid("public-client")),
             "redirect_uri": "https://client.example/callback",
             "code_challenge": create_s256_code_challenge(code_verifier=CODE_VERIFIER),
             "code_challenge_method": "S256",
@@ -314,19 +333,19 @@ async def test_authorize_form_post_matches_get_semantics(
     async with app.state.core_session_factory() as db_session:
         await db_session.execute(
             update(OAuth2ClientDB)
-            .where(OAuth2ClientDB.client_id == "public-client")
+            .where(OAuth2ClientDB.client_id == deterministic_uuid("public-client"))
             .values(requires_consent=False)
         )
         await db_session.commit()
     login_response = await login_browser_session(client, verified_user_credentials)
     assert login_response.status_code == status.HTTP_204_NO_CONTENT
-    csrf_header_name = app.state.settings.session.csrf.header_name
+    csrf_header_name = app.state.settings.browser_session.csrf.header_name
 
     response = await client.post(
         "/oauth2/authorize",
         data={
             "response_type": "code",
-            "client_id": "public-client",
+            "client_id": str(deterministic_uuid("public-client")),
             "redirect_uri": "https://client.example/callback",
             "scope": "read",
             "state": "form-post-state",
@@ -368,7 +387,7 @@ async def test_authorize_rejects_inactive_client(
     async with app.state.core_session_factory() as db_session:
         await db_session.execute(
             update(OAuth2ClientDB)
-            .where(OAuth2ClientDB.client_id == "public-client")
+            .where(OAuth2ClientDB.client_id == deterministic_uuid("public-client"))
             .values(is_active=False)
         )
         await db_session.commit()

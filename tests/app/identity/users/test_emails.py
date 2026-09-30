@@ -24,7 +24,7 @@ async def _create_user(app: FastAPI) -> int:
         )
         assert user_id is not None
         await session.commit()
-        return user_id
+        return int(user_id)
 
 
 @pytest.mark.asyncio

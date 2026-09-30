@@ -34,8 +34,8 @@ async def test_logout_revokes_a_persisted_session_and_clears_cookies(
 ) -> None:
     """Assert logout clears the browser cookie and revokes storage."""
     login_response = await login(client, verified_user_credentials)
-    csrf_header_name = app.state.settings.session.csrf.header_name
-    session_cookie_name = app.state.settings.session.cookie_name
+    csrf_header_name = app.state.settings.browser_session.csrf.header_name
+    session_cookie_name = app.state.settings.browser_session.cookie_name
 
     response = await client.post(
         "/api/v1/sessions/logout",
@@ -73,8 +73,8 @@ async def test_logout_commit_failure_keeps_cookie_and_session_authority(
         lambda message, *_args: logged_messages.append(message),
     )
     login_response = await login(client, verified_user_credentials)
-    csrf_header_name = app.state.settings.session.csrf.header_name
-    session_cookie_name = app.state.settings.session.cookie_name
+    csrf_header_name = app.state.settings.browser_session.csrf.header_name
+    session_cookie_name = app.state.settings.browser_session.cookie_name
 
     async with commit_failure_client(app, client) as failing_client:
         response = await failing_client.post(
@@ -123,7 +123,7 @@ async def test_logout_with_an_invalid_session_cookie_is_idempotent(
     client: httpx.AsyncClient,
 ) -> None:
     """Assert stale session credentials can be cleared without CSRF proof."""
-    session_cookie_name = app.state.settings.session.cookie_name
+    session_cookie_name = app.state.settings.browser_session.cookie_name
     client.cookies.set(session_cookie_name, "invalid-session")
 
     response = await client.post("/api/v1/sessions/logout")
@@ -137,7 +137,7 @@ async def test_logout_with_an_invalid_session_cookie_is_idempotent(
 
 
 @pytest.mark.asyncio
-@app_settings(session={"csrf": {"pattern": "double_submit"}})
+@app_settings(browser_session={"csrf": {"pattern": "double_submit"}})
 async def test_logout_accepts_double_submit_csrf_state(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -145,7 +145,7 @@ async def test_logout_accepts_double_submit_csrf_state(
 ) -> None:
     """Assert configured double-submit CSRF state can authorize logout."""
     login_response = await login(client, verified_user_credentials)
-    csrf_settings = app.state.settings.session.csrf
+    csrf_settings = app.state.settings.browser_session.csrf
 
     response = await client.post(
         "/api/v1/sessions/logout",
@@ -193,7 +193,7 @@ async def test_logout_rejects_csrf_not_bound_to_the_session(
 ) -> None:
     """Assert synchronizer CSRF proof must match the persisted session."""
     await login(client, verified_user_credentials)
-    csrf_header_name = app.state.settings.session.csrf.header_name
+    csrf_header_name = app.state.settings.browser_session.csrf.header_name
 
     response = await client.post(
         "/api/v1/sessions/logout",
@@ -216,7 +216,7 @@ async def test_logout_rejects_untrusted_origins(
 ) -> None:
     """Assert logout rejects origins outside the configured trust set."""
     login_response = await login(client, verified_user_credentials)
-    csrf_header_name = app.state.settings.session.csrf.header_name
+    csrf_header_name = app.state.settings.browser_session.csrf.header_name
 
     response = await client.post(
         "/api/v1/sessions/logout",
@@ -227,7 +227,7 @@ async def test_logout_rejects_untrusted_origins(
     )
 
     assert response.status_code == status.HTTP_403_FORBIDDEN
-    assert response.json()["message"] == "CSRF cookie header mismatch"
+    assert response.json()["message"] == "CSRF request source untrusted"
 
 
 @pytest.mark.asyncio
@@ -239,8 +239,8 @@ async def test_a_revoked_session_cannot_authenticate_again(
 ) -> None:
     """Assert a logged-out session no longer passes browser-session auth."""
     login_response = await login(client, verified_user_credentials)
-    csrf_header_name = app.state.settings.session.csrf.header_name
-    session_cookie_name = app.state.settings.session.cookie_name
+    csrf_header_name = app.state.settings.browser_session.csrf.header_name
+    session_cookie_name = app.state.settings.browser_session.cookie_name
     session_id = login_response.cookies[session_cookie_name]
     csrf_token = login_response.headers[csrf_header_name]
 

@@ -3,11 +3,11 @@
 from fastapi import Request, Response
 
 from app.browser_sessions.enums import CSRFPattern, CSRFTokenExposure
-from app.browser_sessions.settings import CSRFSettings, SessionSettings
+from app.browser_sessions.settings import BrowserSessionSettings, CSRFSettings
 
 
 def get_session_cookie(
-    request: Request, session_settings: SessionSettings
+    request: Request, session_settings: BrowserSessionSettings
 ) -> str | None:
     """Return the raw browser session cookie when present."""
     return request.cookies.get(session_settings.cookie_name)
@@ -16,7 +16,7 @@ def get_session_cookie(
 def set_session_cookie(
     response: Response,
     session_id: str,
-    session_settings: SessionSettings,
+    session_settings: BrowserSessionSettings,
     *,
     max_age_seconds: int | None = None,
 ) -> None:
@@ -41,7 +41,7 @@ def set_session_cookie(
 
 
 def delete_session_cookie(
-    response: Response, session_settings: SessionSettings
+    response: Response, session_settings: BrowserSessionSettings
 ) -> None:
     """Delete the configured browser session cookie."""
     response.delete_cookie(

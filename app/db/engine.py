@@ -20,18 +20,11 @@ def sqlite_url(db_path: Path) -> URL:
 
 
 def create_engine(db_path: Path, *, echo: bool = False) -> "AsyncEngine":
-    """Build a new AsyncEngine.
-
-    Args:
-        db_path (Path): Path to the SQLite database file.
-        echo (bool): Whether SQLAlchemy should log emitted SQL.
-
-    Returns:
-        AsyncEngine: Configured async engine.
-    """
+    """Build an asynchronous engine with the canonical SQLite behavior."""
     engine = create_async_engine(
         url=sqlite_url(db_path),
         echo=echo,
+        hide_parameters=True,
     )
 
     @event.listens_for(engine.sync_engine, "connect")
@@ -55,6 +48,10 @@ def create_engine(db_path: Path, *, echo: bool = False) -> "AsyncEngine":
     @event.listens_for(engine.sync_engine, "begin")
     def begin_sqlite_transaction(connection: "Connection") -> None:
         """Start every SQLite transaction explicitly, including read-first flows."""
+        # Alembic uses an explicit AUTOCOMMIT block for connection-level
+        # pragmas that SQLite refuses to change inside a transaction.
+        if connection.get_execution_options().get("isolation_level") == "AUTOCOMMIT":
+            return
         connection.exec_driver_sql("BEGIN")
 
     return engine
@@ -63,14 +60,7 @@ def create_engine(db_path: Path, *, echo: bool = False) -> "AsyncEngine":
 def create_session_factory(
     engine: "AsyncEngine",
 ) -> "async_sessionmaker[AsyncSession]":
-    """Create a session factory bound to engine.
-
-    Args:
-        engine (AsyncEngine): Shared process engine.
-
-    Returns:
-        async_sessionmaker[AsyncSession]: Session factory.
-    """
+    """Create a session factory bound to the process engine."""
     return async_sessionmaker(
         bind=engine,
         autoflush=False,

@@ -1,0 +1,121 @@
+{% extends "management/base.html" %}
+{% block title %}{{ heading }} · Zero Auth Lite{% endblock %}
+{% block content %}
+  <header class="page-header">
+    <p class="eyebrow">OAuth2 clients</p>
+    <h1>{{ heading }}</h1>
+    {% if client %}
+      <p class="muted">{{ client.client_id }}</p>
+    {% endif %}
+  </header>
+  <section class="panel form-panel">
+    <form class="form-stack" method="post" action="{{ action }}" hx-post="{{ action }}" hx-target="main">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="field">
+        <label for="name">Name</label>
+        <input id="name" name="name" maxlength="{{ form_constraints.oauth2_client_name_max }}" value="{{ client.name if client else '' }}" required>
+      </div>
+      <fieldset>
+        <legend>Grant types</legend>
+        {% for grant in ['authorization_code', 'refresh_token', 'client_credentials', 'urn:ietf:params:oauth:grant-type:device_code'] %}
+          <label class="checkbox">
+            <input type="checkbox" name="grant_types" value="{{ grant }}" {% if client and grant in client.grant_types %}checked{% endif %}> {{ grant }}</label>
+        {% endfor %}
+      </fieldset>
+      <div class="field">
+        <label for="scopes">Scopes</label>
+        <input id="scopes" name="scopes" maxlength="{{ form_constraints.oauth2_scope_list_max }}" value="{{ client.scopes|join(' ') if client else '' }}">
+        <p class="field-hint">Space separated.</p>
+      </div>
+      <div class="field">
+        <label for="redirect-uris">Redirect URIs</label>
+        <textarea id="redirect-uris" name="redirect_uris" rows="4">{{ client.redirect_uris|join('\n') if client else '' }}</textarea>
+        <p class="field-hint">One URI per line.</p>
+      </div>
+      {% if not client %}
+        <div class="field">
+          <label for="user-access">User organization access</label>
+          <select id="user-access" name="user_organization_access">
+            {% for mode in ['unrestricted', 'single', 'selected'] %}
+              <option value="{{ mode }}">{{ mode }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label for="initial-user-organizations">User organization IDs</label>
+          <textarea id="initial-user-organizations" name="organization_ids" rows="5"></textarea>
+          <p class="field-hint">Required for single and selected access; one organization ID per line.</p>
+        </div>
+      {% endif %}
+      <label class="checkbox">
+        <input name="is_confidential" type="checkbox" value="true" {% if client and client.is_confidential %}checked{% endif %}> Confidential client</label>
+      <label class="checkbox">
+        <input name="requires_consent" type="checkbox" value="true" {% if not client or client.requires_consent %}checked{% endif %}> Require consent</label>
+      <label class="checkbox">
+        <input name="is_active" type="checkbox" value="true" {% if not client or client.is_active %}checked{% endif %}> Active</label>
+      <div class="form-actions">
+        <button class="button button--primary" type="submit">
+          {% if client %}Save client{% else %}Register client{% endif %}
+        </button>
+      </div>
+    </form>
+  </section>
+  {% if client %}
+    <div class="content-grid">
+      <section class="panel">
+        <h2>User organization assignments</h2>
+        <form class="form-stack" method="post" action="{{ action }}/user-organizations">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <div class="field">
+            <label for="user-access">Access mode</label>
+            <select id="user-access" name="user_organization_access">
+              {% for mode in ['unrestricted', 'single', 'selected'] %}
+                <option value="{{ mode }}" {% if client.user_organization_access == mode %}selected{% endif %}>{{ mode }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="field">
+            <label for="user-organizations">Organization IDs</label>
+            <textarea id="user-organizations" name="organization_ids" rows="5">{{ user_organization_ids|join('\n') }}</textarea>
+            <p class="field-hint">One organization ID per line.</p>
+          </div>
+          <button class="button button--secondary" type="submit">Replace user policy</button>
+        </form>
+      </section>
+      <section class="panel">
+        <h2>Machine organization access</h2>
+        <form class="form-stack" method="post" action="{{ action }}/machine-organizations">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <div class="field">
+            <label for="machine-access">Access mode</label>
+            <select id="machine-access" name="machine_organization_access">
+              {% for mode in ['none', 'single', 'selected', 'unrestricted'] %}
+                <option value="{{ mode }}" {% if client.machine_organization_access == mode %}selected{% endif %}>{{ mode }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="field">
+            <label for="machine-organizations">Organization IDs</label>
+            <textarea id="machine-organizations" name="organization_ids" rows="5">{{ machine_organization_ids|join('\n') }}</textarea>
+            <p class="field-hint">One organization ID per line.</p>
+          </div>
+          <button class="button button--secondary" type="submit">Replace machine policy</button>
+        </form>
+      </section>
+    </div>
+    <section class="panel danger-panel">
+      <h2>Credentials and deletion</h2>
+      {% if client.is_confidential %}
+        <form class="form-stack" method="post" action="{{ action }}/rotate-secret">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label class="checkbox">
+            <input type="checkbox" name="confirm" value="true" required> Confirm secret rotation</label>
+          <p class="muted">Existing OAuth2 sessions and tokens remain valid until expiry or explicit revocation.</p>
+          <button class="button button--danger" type="submit">Rotate secret</button>
+        </form>
+      {% endif %}
+      <a class="button button--danger" href="{{ action }}/delete">Delete client</a>
+    </section>
+  {% endif %}
+  <a class="text-link" href="/management/operator/oauth2/clients">Back to clients</a>
+{% endblock %}

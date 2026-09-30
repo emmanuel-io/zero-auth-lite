@@ -7,13 +7,13 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.browser_sessions.dtos import (
-    SessionReadDTO,
-    SessionSlideResultDTO,
+    BrowserSessionReadDTO,
+    BrowserSessionSlideResultDTO,
 )
-from app.browser_sessions.errors import SessionInvalidError
-from app.browser_sessions.hashing import hash_session_id
+from app.browser_sessions.errors import BrowserSessionInvalidError
+from app.browser_sessions.hashing import hash_configured_session_id
 from app.browser_sessions.mapping import to_session_dto
-from app.browser_sessions.settings import SessionSettings
+from app.browser_sessions.settings import BrowserSessionSettings
 from app.db.models.browser_session import BrowserSessionDB
 from app.db.models.organization import OrganizationDB
 from app.db.models.organization_membership import OrganizationMembershipDB
@@ -25,30 +25,26 @@ from app.identity.mapping import to_identity
 from app.identity.users.emails import active_email_loader
 
 
-class SessionLifecycleService:
+class BrowserSessionLifecycleService:
     """Resolve browser-session persistence and slide its expiry."""
 
     def __init__(
         self,
         db_session: AsyncSession,
-        settings: SessionSettings,
+        settings: BrowserSessionSettings,
     ) -> None:
         """Initialize browser-session lifecycle workflows."""
         self.db_session = db_session
         self.settings = settings
 
-    def _hash_session_id(self, *, session_id: str) -> str:
-        """Return the configured database lookup digest for a raw session ID."""
-        return hash_session_id(
-            session_id=session_id,
-            secret=self.settings.id_hash_secret.get_secret_value(),
-        )
-
     def stored_session_id(self, *, session_id: str) -> str:
         """Return the stored digest for a raw browser session ID."""
-        return self._hash_session_id(session_id=session_id)
+        return hash_configured_session_id(
+            session_id=session_id,
+            settings=self.settings,
+        )
 
-    async def get_session_csrf_state(self, *, session_id: str) -> SessionReadDTO:
+    async def get_session_csrf_state(self, *, session_id: str) -> BrowserSessionReadDTO:
         """Return the stored state for a valid browser session."""
         return await self.load_session(session_id=session_id)
 
@@ -57,23 +53,25 @@ class SessionLifecycleService:
         session_obj = await self.get_session_csrf_state(session_id=session_id)
         return session_obj.csrf
 
-    async def load_session(self, *, session_id: str) -> SessionReadDTO:
+    async def load_session(self, *, session_id: str) -> BrowserSessionReadDTO:
         """Load and validate a session without recording browser activity."""
-        session_id_hash = self._hash_session_id(session_id=session_id)
+        session_id_hash = self.stored_session_id(session_id=session_id)
         row = await self.db_session.scalar(
             select(BrowserSessionDB).where(BrowserSessionDB.id == session_id_hash)
         )
         session_obj = to_session_dto(row) if row is not None else None
         if session_obj is None:
-            raise SessionInvalidError
+            raise BrowserSessionInvalidError
         now = datetime.now(UTC)
         if session_obj.revoked_at is not None:
-            raise SessionInvalidError
+            raise BrowserSessionInvalidError
         if session_obj.expires_at <= now or session_obj.absolute_expires_at <= now:
-            raise SessionInvalidError
+            raise BrowserSessionInvalidError
         return session_obj
 
-    async def slide_session(self, *, session: SessionReadDTO) -> SessionSlideResultDTO:
+    async def slide_session(
+        self, *, session: BrowserSessionReadDTO
+    ) -> BrowserSessionSlideResultDTO:
         """Record activity and extend one already validated browser session."""
         patch_expires_at = None
         now = datetime.now(UTC)
@@ -99,7 +97,7 @@ class SessionLifecycleService:
                 .values(**values)
             )
             await self.db_session.flush()
-        return SessionSlideResultDTO(
+        return BrowserSessionSlideResultDTO(
             session=replace(
                 session,
                 expires_at=effective_expires_at,
@@ -132,7 +130,7 @@ class SessionLifecycleService:
 
 
 def remaining_session_lifetime_seconds(
-    session: SessionReadDTO, *, now: datetime | None = None
+    session: BrowserSessionReadDTO, *, now: datetime | None = None
 ) -> int:
     """Return whole seconds before the effective SQL session expiration."""
     current_time = now or datetime.now(UTC)

@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models.organization_membership import OrganizationMembershipDB
 from app.db.models.user import UserDB, UserEmailDB
 from app.identity.users.commands import UserUpdateCommand
-from app.identity.users.enums import OrganizationUserRole, UserEmailStatus
+from app.identity.users.enums import OrganizationMembershipRole, UserEmailStatus
 from app.identity.users.errors import (
     LastActiveOperatorError,
     LastActiveOrganizationAdminError,
@@ -44,7 +44,7 @@ class UserAccessInvariantService:
             .where(
                 OrganizationMembershipDB.organization_id == membership.organization_id
             )
-            .where(OrganizationMembershipDB.role == OrganizationUserRole.ADMIN)
+            .where(OrganizationMembershipDB.role == OrganizationMembershipRole.ADMIN)
             .where(UserDB.is_active.is_(True))
             .where(
                 UserEmailDB.status == UserEmailStatus.CURRENT,
@@ -81,10 +81,10 @@ class UserAccessInvariantService:
         changes = command.changes()
         accessible = target.is_active and target.email_verified
         removes_organization_admin = (
-            membership.role is OrganizationUserRole.ADMIN
+            membership.role is OrganizationMembershipRole.ADMIN
             and accessible
             and (
-                changes.get("role") is OrganizationUserRole.MEMBER
+                changes.get("role") is OrganizationMembershipRole.MEMBER
                 or changes.get("is_active") is False
                 or changes.get("email_verified") is False
                 or changes.get("organization_id")
@@ -121,7 +121,7 @@ class UserAccessInvariantService:
         organization_ids = {
             membership.organization_id
             for target, membership in targets
-            if membership.role is OrganizationUserRole.ADMIN
+            if membership.role is OrganizationMembershipRole.ADMIN
             and target.is_active
             and target.email_verified
         }
@@ -153,7 +153,9 @@ class UserAccessInvariantService:
                 )
                 .join(UserEmailDB, UserEmailDB.user_id == UserDB.id)
                 .where(OrganizationMembershipDB.organization_id == organization_id)
-                .where(OrganizationMembershipDB.role == OrganizationUserRole.ADMIN)
+                .where(
+                    OrganizationMembershipDB.role == OrganizationMembershipRole.ADMIN
+                )
                 .where(UserDB.is_active.is_(True))
                 .where(
                     UserEmailDB.status == UserEmailStatus.CURRENT,

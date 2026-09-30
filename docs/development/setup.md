@@ -54,7 +54,7 @@ Run the migration and application in one terminal:
 
 ```bash
 uv run alembic upgrade head
-uv run uvicorn app.main:create_app --factory --reload
+uv run uvicorn app.main:create_app --factory --reload --no-access-log --no-proxy-headers
 ```
 
 Run both commands from the repository root so `zero-auth-lite.toml` is loaded,
@@ -67,18 +67,20 @@ Run durable notification delivery in another terminal so verification,
 invitation, and password-reset messages reach Mailpit:
 
 ```bash
-uv run python -m app.events.worker
+uv run python -m app.notifications.worker
 ```
 
-Run OAuth2 persistence cleanup in a third terminal so expired protocol state
-is removed outside the FastAPI process:
+Run browser-session and OAuth2 persistence cleanup in two more terminals so
+terminal authentication state is removed outside the FastAPI process:
 
 ```bash
+uv run python -m app.browser_sessions.cleanup_worker
 uv run python -m app.oauth2.cleanup_worker
 ```
 
-Run exactly one continuous cleanup worker for the development database. The
-[OAuth2 cleanup runbook](../operations/oauth2-cleanup.md) also documents
+Run exactly one instance of each continuous cleanup worker for the development
+database. The [browser-session cleanup](../operations/browser-session-cleanup.md)
+and [OAuth2 cleanup](../operations/oauth2-cleanup.md) runbooks also document
 one-shot execution for scheduled deployments.
 
 Open the built-in authentication UI at `http://localhost:8000/login` and

@@ -3,15 +3,15 @@
 from typing import cast, TYPE_CHECKING
 
 import pytest
-from app.browser_sessions.authentication import SessionAuthenticationService
-from app.browser_sessions.dependencies import (
+from app.browser_sessions.authentication import BrowserSessionAuthenticationService
+from app.browser_sessions.lifecycle import BrowserSessionLifecycleService
+from app.browser_sessions.revocation import BrowserSessionRevocationService
+from app.browser_sessions.service_dependencies import (
     get_session_authentication_service,
     get_session_lifecycle_service,
     get_session_revocation_service,
 )
-from app.browser_sessions.lifecycle import SessionLifecycleService
-from app.browser_sessions.revocation import SessionRevocationService
-from app.browser_sessions.settings import SessionSettings
+from app.browser_sessions.settings import BrowserSessionSettings
 
 
 pytestmark = pytest.mark.unit
@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 DB_SESSION = cast("AsyncSession", object())
 SESSION_FACTORY = cast("async_sessionmaker[AsyncSession]", object())
 PASSWORD_HASHER = cast("PasswordHasherProtocol", object())
-SESSION_SETTINGS = SessionSettings()
+SESSION_SETTINGS = BrowserSessionSettings()
 
 
 def test_session_dependencies_build_focused_services() -> None:
@@ -43,6 +43,6 @@ def test_session_dependencies_build_focused_services() -> None:
         SESSION_SETTINGS,
     )
 
-    assert isinstance(authentication, SessionAuthenticationService)
-    assert isinstance(lifecycle, SessionLifecycleService)
-    assert isinstance(revocation, SessionRevocationService)
+    assert isinstance(authentication, BrowserSessionAuthenticationService)
+    assert isinstance(lifecycle, BrowserSessionLifecycleService)
+    assert isinstance(revocation, BrowserSessionRevocationService)

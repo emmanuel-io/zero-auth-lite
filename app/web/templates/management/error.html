@@ -1,0 +1,8 @@
+{% extends "management/fragment_base.html" if fragment else "management/base.html" %}
+{% block title %}{{ title }} · Zero Auth Lite{% endblock %}
+{% block content %}
+  <div class="alert" role="alert">
+    <h1 id="page-title">{{ title }}</h1>
+    <p>{{ message }}</p>
+  </div>
+{% endblock %}

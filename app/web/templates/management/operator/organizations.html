@@ -1,0 +1,55 @@
+{% extends "management/base.html" %}
+{% block title %}Organizations · Zero Auth Lite{% endblock %}
+{% block content %}
+  <header class="page-header page-header--actions">
+    <div>
+      <p class="eyebrow">Server operator</p>
+      <h1>Organizations</h1>
+      <p class="muted">{{ total }} organizations.</p>
+    </div>
+    <a class="button button--primary" href="/management/operator/organizations/new">Create organization</a>
+  </header>
+  {% if organizations %}
+    <div class="table-wrap" tabindex="0" role="region" aria-label="Organizations">
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>ID</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for organization in organizations %}
+            <tr>
+              <td>{{ organization.name }}</td>
+              <td>{{ organization.id }}</td>
+              <td>
+                <div class="table-actions">
+                  <a class="button button--secondary button--compact" href="/management/operator/organizations/{{ organization.id }}">Edit</a>
+                  <a class="button button--secondary button--compact" href="/management/operator/users?organization_id={{ organization.id }}">Manage users</a>
+                  <a class="button button--secondary button--compact" href="/management/operator/organizations/{{ organization.id }}/sessions">Manage sessions</a>
+                </div>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="empty-state">
+      <p>No organizations.</p>
+    </div>
+  {% endif %}
+  <nav class="pagination" aria-label="Pagination">
+    {% if previous_url %}
+      <a href="{{ previous_url }}">Previous</a>
+    {% else %}
+      <span>
+      </span>
+    {% endif %}
+    {% if next_url %}
+      <a href="{{ next_url }}">Next</a>
+    {% endif %}
+  </nav>
+{% endblock %}

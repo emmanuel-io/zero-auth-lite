@@ -4,7 +4,6 @@
 
 # Root storage, process identity, and navigation settings
 # runtime_dir = "/tmp/zero-auth-lite"
-# snowflake_node_id = 0
 # db_path = "./data/zero-auth-lite.db"
 # db_echo = false
 default_redirect_url = "http://localhost:8000/"
@@ -15,10 +14,25 @@ log_level = "DEBUG"
 # trusted_hosts = []
 # trusted_proxy_ips = []
 
+[api]
+# interactive_auth_routes_enabled = true
+
 [ui]
-# authentication = "builtin"
-# external_login_url = "http://localhost:3000/login"
+# identity_workflow_mode = "builtin"
+# management_authentication = "builtin"
 # oauth2_interaction = "builtin"
+# organization_admin_enabled = true
+# operator_enabled = true
+
+[ui.urls]
+login = "/login"
+logout = "/logout"
+verification = "http://localhost:8000/verify-email"
+password_reset = "http://localhost:8000/reset-password"
+invitation = "http://localhost:8000/accept-invite"
+authorization_interaction = "/login"
+authorization_consent = "/consent"
+device_interaction = "http://localhost:8000/oauth2/device/verify"
 
 [bootstrap]
 # operator_email = "operator@example.com"
@@ -28,27 +42,28 @@ log_level = "DEBUG"
 # last_name = "Operator"
 
 [cors]
-# enabled = true
+# Use [] for a same-origin server that does not need CORS.
 allowed_origins = ["http://localhost:8000", "http://127.0.0.1:8000"]
 # allow_credentials = true
 # allow_methods = ["*"]
 # allow_headers = ["*"]
 # expose_headers = ["X-CSRF-Token", "X-Request-Id"]
 
-[session]
+[browser_session]
 # enabled = true
 cookie_domain = ""
 # cookie_name = "sessionid"
 # cookie_same_site = "lax"
 cookie_secure = false
-# id_hash_secret = "dev-session-id-hash-secret-for-local-server-example"
+# hash_secret = "dev-session-id-hash-secret-for-local-server-example"
 # absolute_ttl_seconds = 604800
 # cleanup_batch_size = 100
+# cleanup_interval_seconds = 3600
 # max_sessions_per_user = 10
 # slide_seconds = 1800
 # ttl_seconds = 28800
 
-[session.csrf]
+[browser_session.csrf]
 cookie_domain = ""
 # cookie_name = "csrftoken"
 # cookie_same_site = "lax"
@@ -69,9 +84,9 @@ trusted_origins = ["http://localhost:8000", "http://127.0.0.1:8000"]
 # allow_client_secret_post = true
 # jwks_enabled = true
 # oidc_enabled = true
-jwt_issuer = "http://localhost:8000"
-# jwt_audience = "zero-auth-lite-example-api"
-# jwt_key_id = "local-dev-key"
+issuer = "http://localhost:8000"
+# access_token_audience = "zero-auth-lite-example-api"
+# signing_key_id = "local-dev-key"
 # authorization_code_ttl_seconds = 300
 # access_token_lifetime_seconds = 900
 # id_token_lifetime_seconds = 900
@@ -84,20 +99,17 @@ jwt_issuer = "http://localhost:8000"
 # Development-only built-in secrets and raw Ed25519 key pair:
 # authorization_code_hash_secret = "dev-auth-code-hash-secret-for-local-server-example"
 # token_hash_secret = "dev-oauth2-token-hash-secret-for-local-server-example"
-# prv_key_b64 = "8+EAUJiqpmlXFLuCF2v4LU6d8TKVp1R3JE3UwdrNhNI="
-# pub_key_b64 = "37TbbJO+trhWq5Wqva6QfrOsN5DwQjy5R1evwH2vutY="
+# signing_private_key_b64 = "8+EAUJiqpmlXFLuCF2v4LU6d8TKVp1R3JE3UwdrNhNI="
+# signing_public_key_b64 = "37TbbJO+trhWq5Wqva6QfrOsN5DwQjy5R1evwH2vutY="
 # previous_public_keys = []
 
-[auth]
+[identity_workflow]
 # registration_enabled = true
 
-[auth.email]
-frontend_base_url = "http://localhost:8000"
-
-[auth.tokens]
+[identity_workflow.workflow_tokens]
 # derivation_key_id = "default"
-# derivation_secret = "dev-auth-token-derivation-secret-for-local-server-example"
-# previous_derivation_secrets = [{ key_id = "previous", secret = "replace-with-a-previous-secret" }]
+# derivation_secret = "dev-workflow-token-derivation-secret-for-local-server-example"
+# previous_derivation_secrets = [{ key_id = "previous", secret = "replace-with-a-previous-secret-value" }]
 # verify_token_ttl_seconds = 86400
 # invite_token_ttl_seconds = 604800
 # reset_token_ttl_seconds = 3600
@@ -110,13 +122,14 @@ frontend_base_url = "http://localhost:8000"
 # template_dir = "/absolute/path/to/templates"
 smtp_host = "localhost"
 # smtp_port = 1025
+# SMTP authentication requires smtp_starttls or smtp_ssl.
 # smtp_username = "username"
 # smtp_password = "password"
 # smtp_starttls = false
 # smtp_ssl = false
 # smtp_timeout_seconds = 10.0
 
-[events]
+[notification_outbox]
 # poll_interval_seconds = 1.0
 # batch_size = 20
 # lease_seconds = 60

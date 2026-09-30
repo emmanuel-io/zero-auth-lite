@@ -12,6 +12,8 @@ from app.browser_sessions.errors import (
     CSRFCookieHeaderMismatchError,
     CSRFMissingCookieError,
     CSRFMissingHeaderError,
+    CSRFRequestSourceMissingError,
+    CSRFRequestSourceUntrustedError,
 )
 from app.browser_sessions.settings import CSRFSettings
 from app.core.compare import constant_time_equals
@@ -83,6 +85,23 @@ def test_validate_request_origin_accepts_public_and_trusted_origins() -> None:
     )
 
 
+def test_validate_request_origin_accepts_normalized_configured_origins() -> None:
+    """Compare browser origins with canonical configured values."""
+    settings = CSRFSettings(
+        public_origin="HTTPS://PUBLIC.Test:443/",
+        trusted_origins=("https://TRUSTED.Test/",),
+    )
+
+    validate_request_origin(
+        request=make_request(headers={"origin": "https://trusted.test"}),
+        csrf_settings=settings,
+    )
+    validate_request_origin(
+        request=make_request(headers={"referer": "https://public.test/path"}),
+        csrf_settings=settings,
+    )
+
+
 def test_validate_request_origin_accepts_opaque_same_origin_form_navigation() -> None:
     """Use unforgeable Fetch Metadata when Chrome serializes Origin as null."""
     validate_request_origin(
@@ -103,25 +122,25 @@ def test_validate_request_origin_rejects_missing_invalid_and_untrusted_values() 
     """Assert origin validation rejects absent, unparsable, and untrusted origins."""
     settings = CSRFSettings()
 
-    with pytest.raises(CSRFMissingHeaderError):
+    with pytest.raises(CSRFRequestSourceMissingError):
         validate_request_origin(
             request=make_request(),
             csrf_settings=settings,
         )
 
-    with pytest.raises(CSRFCookieHeaderMismatchError):
+    with pytest.raises(CSRFRequestSourceUntrustedError):
         validate_request_origin(
             request=make_request(headers={"origin": "not-a-url"}),
             csrf_settings=settings,
         )
 
-    with pytest.raises(CSRFCookieHeaderMismatchError):
+    with pytest.raises(CSRFRequestSourceUntrustedError):
         validate_request_origin(
             request=make_request(headers={"origin": "https://evil.test"}),
             csrf_settings=settings,
         )
 
-    with pytest.raises(CSRFCookieHeaderMismatchError):
+    with pytest.raises(CSRFRequestSourceUntrustedError):
         validate_request_origin(
             request=make_request(
                 headers={

@@ -1,16 +1,15 @@
 """ORM-to-DTO mapping for browser sessions."""
 
-from app.browser_sessions.dtos import SessionReadDTO
+from app.browser_sessions.dtos import BrowserSessionReadDTO
 from app.core.time import as_utc_aware
 from app.db.models.browser_session import BrowserSessionDB
-from app.public_ids import PublicId
 
 
-def to_session_dto(session: BrowserSessionDB) -> SessionReadDTO:
+def to_session_dto(session: BrowserSessionDB) -> BrowserSessionReadDTO:
     """Convert a browser-session row to its stable DTO."""
-    return SessionReadDTO(
+    return BrowserSessionReadDTO(
         stored_session_id=session.id,
-        public_id=PublicId(session.public_id),
+        public_id=session.public_id,
         user_id=session.user_id,
         csrf=session.csrf,
         absolute_expires_at=as_utc_aware(session.absolute_expires_at),

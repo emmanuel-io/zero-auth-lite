@@ -5,32 +5,27 @@ from typing import Annotated
 from fastapi import APIRouter, Security, status
 
 from app.api.error_responses import app_error_responses
+from app.api.v1.organization.mapping import current_organization_response
 from app.api.v1.organization.schemas import (
     CurrentOrganizationPatchRequest,
     CurrentOrganizationResponse,
 )
 from app.browser_sessions.errors import (
-    CSRFCookieHeaderMismatchError,
-    CSRFHeaderSessionMismatchError,
-    CSRFMissingCookieError,
-    CSRFMissingHeaderError,
-    SessionInvalidError,
+    BrowserSessionInvalidError,
+    CSRF_ERRORS,
+)
+from app.core.errors.common import (
+    ForbiddenOperationError,
+    ObjectNotFoundError,
+    UnauthorizedError,
 )
 from app.db.errors import CheckViolationError
-from app.errors import ForbiddenOperationError, ObjectNotFoundError, UnauthorizedError
 from app.identity.dependencies import OrganizationMetadataServiceDep
-from app.identity.organizations.dtos import OrganizationReadDTO, OrganizationUpdateDTO
+from app.identity.organizations.dtos import OrganizationUpdateDTO
 from app.openapi_tags import ORGANIZATION_ADMINISTRATION_V1_TAG
 from app.security.authorization import require_organization_admin_permission
-from app.security.dtos import UserPrincipalContext
 from app.security.permissions import Permission
-
-
-def current_organization_response(
-    dto: OrganizationReadDTO,
-) -> CurrentOrganizationResponse:
-    """Convert current-organization service data to an HTTP response."""
-    return CurrentOrganizationResponse(name=dto.name, public_id=dto.public_id)
+from app.security.principals import UserPrincipalContext
 
 
 router = APIRouter(tags=[ORGANIZATION_ADMINISTRATION_V1_TAG])
@@ -42,7 +37,7 @@ router = APIRouter(tags=[ORGANIZATION_ADMINISTRATION_V1_TAG])
     summary="Get current organization metadata",
     responses=app_error_responses(
         UnauthorizedError,
-        SessionInvalidError,
+        BrowserSessionInvalidError,
         ForbiddenOperationError,
         ObjectNotFoundError,
         descriptions={
@@ -78,12 +73,9 @@ async def get_current_organization(
     summary="Patch current organization metadata",
     responses=app_error_responses(
         UnauthorizedError,
-        SessionInvalidError,
+        BrowserSessionInvalidError,
         ForbiddenOperationError,
-        CSRFMissingCookieError,
-        CSRFMissingHeaderError,
-        CSRFCookieHeaderMismatchError,
-        CSRFHeaderSessionMismatchError,
+        *CSRF_ERRORS,
         ObjectNotFoundError,
         CheckViolationError,
         descriptions={

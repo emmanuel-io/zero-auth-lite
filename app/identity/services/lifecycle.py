@@ -2,48 +2,50 @@
 
 import secrets
 from collections.abc import Sequence
-from datetime import datetime, UTC
 from logging import getLogger
 from typing import cast, TYPE_CHECKING
 
-from sqlalchemy import delete, insert, select, update
+from sqlalchemy import delete, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm.attributes import set_committed_value
 
-from app.auth_tokens.enums import AuthTokenPurpose
+from app.browser_sessions.enums import BrowserSessionRevocationReason
+from app.core.errors.common import ObjectNotFoundError
 from app.db.helpers import map_integrity_error
-from app.db.models.auth_token import UserAuthTokenDB
 from app.db.models.organization_membership import OrganizationMembershipDB
-from app.db.models.user import UserDB, UserEmailDB
-from app.errors import ObjectNotFoundError
-from app.events.protocols import EventPublisher
-from app.events.types import (
-    AccountVerificationRequested,
-    EmailChangeRequested,
-    InviteCreated,
-)
+from app.db.models.user import UserDB
 from app.identity.errors import CurrentPasswordMismatchError
 from app.identity.services.access_invariants import UserAccessInvariantService
 from app.identity.services.email_lifecycle import (
-    PreparedUserUpdate,
+    EmailUpdateEffects,
     UserEmailLifecycleService,
 )
-from app.identity.services.lifecycle_policy import EmailUpdatePolicy
 from app.identity.users.commands import (
     UserCreateCommand,
     UserOnboardingMode,
     UserUpdateCommand,
 )
+from app.identity.users.creation import create_user_identity
 from app.identity.users.dtos import UserPasswordChangeDTO
-from app.identity.users.emails import create_user_email
-from app.identity.users.enums import UserEmailStatus
+from app.identity.users.enums import (
+    EmailUpdatePolicy,
+    OrganizationMembershipRole,
+)
 from app.identity.users.errors import InactiveUserInvitationError
 from app.identity.users.specs import UserSpecs
+from app.notifications.events import (
+    AccountVerificationRequested,
+    EmailChangeRequested,
+    InviteCreated,
+)
+from app.notifications.protocols import NotificationPublisher
 from app.password.async_hashing import hash_password, verify_password
 from app.password.protocols import PasswordHasherProtocol
-from app.public_ids import PublicId
 from app.security.session_revocation import SecuritySessionRevocationService
+from app.workflow_tokens.service import (
+    invalidate_active_credential_tokens,
+    invalidate_all_active_workflow_tokens,
+)
 
 
 if TYPE_CHECKING:
@@ -62,14 +64,14 @@ class UserLifecycleService:
         *,
         db_session: AsyncSession,
         password_hasher: PasswordHasherProtocol,
-        event_publisher: EventPublisher,
+        notification_publisher: NotificationPublisher,
         security_revocation: SecuritySessionRevocationService,
         session_factory: "async_sessionmaker[AsyncSession]",
     ) -> None:
         """Initialize lifecycle collaborators bound to one transaction."""
         self.db_session = db_session
         self.password_hasher = password_hasher
-        self.event_publisher = event_publisher
+        self.notification_publisher = notification_publisher
         self.security_revocation = security_revocation
         self.session_factory = session_factory
         self.email_lifecycle = UserEmailLifecycleService(db_session)
@@ -81,64 +83,34 @@ class UserLifecycleService:
         command: UserCreateCommand,
     ) -> tuple[UserDB, OrganizationMembershipDB]:
         """Create a user and atomically reserve its normalized email."""
-        values = command.model_dump(
-            exclude={
-                "email",
-                "email_verified",
-                "onboarding",
-                "password",
-                "organization_id",
-                "role",
-            }
-        )
         password = command.password
         if password is None:
             password = secrets.token_urlsafe(UserSpecs.GENERATED_PASSWORD_BYTES)
-        values["hashed_password"] = await hash_password(self.password_hasher, password)
+        hashed_password = await hash_password(self.password_hasher, password)
         await self.email_lifecycle.require_available(
             email=str(command.email),
             current_user_id=None,
         )
         try:
             async with self.db_session.begin_nested():
-                row = (
-                    await self.db_session.execute(
-                        insert(UserDB).values(**values).returning(UserDB)
-                    )
-                ).scalar_one()
-                membership = (
-                    await self.db_session.execute(
-                        insert(OrganizationMembershipDB)
-                        .values(
-                            user_id=row.id,
-                            organization_id=command.organization_id,
-                            role=command.role,
-                        )
-                        .returning(OrganizationMembershipDB)
-                    )
-                ).scalar_one()
-                user_email = await create_user_email(
+                row, membership, user_email = await create_user_identity(
                     self.db_session,
-                    user_id=row.id,
-                    email=str(command.email),
-                    status=UserEmailStatus.CURRENT,
-                    verified_at=datetime.now(UTC) if command.email_verified else None,
+                    command=command,
+                    hashed_password=hashed_password,
                 )
-                set_committed_value(row, "emails", [user_email])
-                await self.db_session.flush()
         except IntegrityError as exc:
             raise map_integrity_error(exc) from exc
         if command.onboarding is UserOnboardingMode.INVITATION:
-            await self.event_publisher.publish(
+            await self.notification_publisher.publish(
                 InviteCreated(
-                    user_public_id=PublicId(row.public_id),
+                    user_public_id=row.public_id,
                     user_email_id=user_email.id,
                 )
             )
         else:
-            await self.event_publisher.publish(
+            await self.notification_publisher.publish(
                 AccountVerificationRequested(
-                    user_public_id=PublicId(row.public_id),
+                    user_public_id=row.public_id,
                     user_email_id=user_email.id,
                 )
             )
@@ -149,29 +121,24 @@ class UserLifecycleService:
         *,
         target: UserDB,
         membership: OrganizationMembershipDB,
-        prepared: PreparedUserUpdate,
-        role: object | None,
-        organization_id: object | None,
+        effects: EmailUpdateEffects,
     ) -> bool:
         """Return whether a mutation changes authentication or authorization."""
-        security_fields = (
-            "hashed_password",
-            "is_active",
-            "is_operator",
+        user_security_changed = (
+            effects.user_changes.is_active is not None
+            and effects.user_changes.is_active != target.is_active
+        ) or (
+            effects.user_changes.is_operator is not None
+            and effects.user_changes.is_operator != target.is_operator
         )
-        user_security_changed = any(
-            field in prepared.changes
-            and prepared.changes[field] != getattr(target, field, None)
-            for field in security_fields
-        )
-        role_changed = role is not None and role != membership.role
+        role_changed = effects.role is not None and effects.role != membership.role
         organization_changed = (
-            organization_id is not None
-            and organization_id != membership.organization_id
+            effects.organization_id is not None
+            and effects.organization_id != membership.organization_id
         )
         return (
             user_security_changed
-            or prepared.email_security_changed
+            or effects.email_security_changed
             or role_changed
             or organization_changed
         )
@@ -190,47 +157,42 @@ class UserLifecycleService:
             membership=membership,
             command=command,
         )
-        prepared = await self.email_lifecycle.prepare_update(
+        effects = await self.email_lifecycle.apply_update(
             target=target,
             command=command,
             policy=email_policy,
         )
-        role = prepared.changes.pop("role", None)
-        organization_id = prepared.changes.pop("organization_id", None)
+        user_changes = effects.user_changes.values()
         if (
-            not prepared.changes
-            and role is None
-            and organization_id is None
-            and not prepared.resend_invite
-            and not prepared.send_email_change
-            and not prepared.email_security_changed
+            not user_changes
+            and effects.role is None
+            and effects.organization_id is None
+            and not effects.resend_invite
+            and not effects.send_email_change
+            and not effects.email_security_changed
         ):
             return target, membership
         revoke_sessions = self._revokes_sessions(
             target=target,
             membership=membership,
-            prepared=prepared,
-            role=role,
-            organization_id=organization_id,
+            effects=effects,
         )
-        deactivates_user = (
-            target.is_active and prepared.changes.get("is_active") is False
-        )
+        deactivates_user = target.is_active and effects.user_changes.is_active is False
         row = target
-        if prepared.changes:
+        if user_changes:
             row = (
                 await self.db_session.execute(
                     update(UserDB)
                     .where(UserDB.id == target.id)
-                    .values(**prepared.changes)
+                    .values(**user_changes)
                     .returning(UserDB)
                 )
             ).scalar_one()
-        membership_changes: dict[str, object] = {}
-        if role is not None:
-            membership_changes["role"] = role
-        if organization_id is not None:
-            membership_changes["organization_id"] = organization_id
+        membership_changes: dict[str, int | OrganizationMembershipRole] = {}
+        if effects.role is not None:
+            membership_changes["role"] = effects.role
+        if effects.organization_id is not None:
+            membership_changes["organization_id"] = effects.organization_id
         if membership_changes:
             membership = (
                 await self.db_session.execute(
@@ -243,38 +205,31 @@ class UserLifecycleService:
         if revoke_sessions:
             await self.security_revocation.revoke_user_security_sessions(
                 user_id=row.id,
-                reason="user_auth_changed",
+                browser_reason=BrowserSessionRevocationReason.USER_AUTH_CHANGED,
             )
         if deactivates_user:
-            await self.db_session.execute(
-                update(UserAuthTokenDB)
-                .where(
-                    UserAuthTokenDB.user_email_id.in_(
-                        select(UserEmailDB.id).where(UserEmailDB.user_id == row.id)
-                    )
-                )
-                .where(UserAuthTokenDB.purpose == AuthTokenPurpose.reset_password)
-                .where(UserAuthTokenDB.used_at.is_(None))
-                .values(used_at=datetime.now(UTC))
+            await invalidate_all_active_workflow_tokens(
+                self.db_session,
+                user_id=row.id,
             )
         await self.db_session.flush()
         await self.db_session.refresh(row)
-        if prepared.send_email_change:
+        if effects.send_email_change:
             pending = row.pending_email_record
             if pending is None:
                 msg = f"User {row.id} has no pending email to confirm."
                 raise RuntimeError(msg)
-            await self.event_publisher.publish(
+            await self.notification_publisher.publish(
                 EmailChangeRequested(
-                    user_public_id=PublicId(row.public_id),
+                    user_public_id=row.public_id,
                     user_email_id=pending.id,
                 )
             )
-        if prepared.resend_invite:
+        if effects.resend_invite and row.invitation_pending:
             current = row.current_email
-            await self.event_publisher.publish(
+            await self.notification_publisher.publish(
                 InviteCreated(
-                    user_public_id=PublicId(row.public_id),
+                    user_public_id=row.public_id,
                     user_email_id=current.id,
                 )
             )
@@ -284,11 +239,11 @@ class UserLifecycleService:
         """Publish a new invitation for an active, unverified user."""
         if not target.is_active:
             raise InactiveUserInvitationError
-        if not target.email_verified:
+        if target.invitation_pending and not target.email_verified:
             current = target.current_email
-            await self.event_publisher.publish(
+            await self.notification_publisher.publish(
                 InviteCreated(
-                    user_public_id=PublicId(target.public_id),
+                    user_public_id=target.public_id,
                     user_email_id=current.id,
                 )
             )
@@ -297,10 +252,11 @@ class UserLifecycleService:
         self, *, target: UserDB, data: UserPasswordChangeDTO
     ) -> None:
         """Verify and replace a password using a dedicated short write."""
+        target_id = target.id
         previous_hash = target.hashed_password
-        # The target is fully materialized; release its read transaction before
-        # running the expensive password verification and replacement hash.
-        await self.db_session.commit()
+        # This autonomous operation cannot compose with request-scoped writes.
+        # Discard session sliding before running expensive password hashing.
+        await self.db_session.rollback()
         if not await verify_password(
             self.password_hasher,
             password=data.current_password,
@@ -311,30 +267,23 @@ class UserLifecycleService:
         async with self.session_factory.begin() as write_session:
             changed_user_id = await write_session.scalar(
                 update(UserDB)
-                .where(UserDB.id == target.id)
+                .where(UserDB.id == target_id)
                 .where(UserDB.hashed_password == previous_hash)
                 .where(UserDB.is_active.is_(True))
-                .values(hashed_password=new_hash)
+                .values(hashed_password=new_hash, invitation_pending=False)
                 .returning(UserDB.id)
             )
             if changed_user_id is None:
                 raise CurrentPasswordMismatchError
-            await write_session.execute(
-                update(UserAuthTokenDB)
-                .where(
-                    UserAuthTokenDB.user_email_id.in_(
-                        select(UserEmailDB.id).where(UserEmailDB.user_id == target.id)
-                    )
-                )
-                .where(UserAuthTokenDB.purpose == AuthTokenPurpose.reset_password)
-                .where(UserAuthTokenDB.used_at.is_(None))
-                .values(used_at=datetime.now(UTC))
+            await invalidate_active_credential_tokens(
+                write_session,
+                user_id=target_id,
             )
             await SecuritySessionRevocationService(
                 db_session=write_session
             ).revoke_user_security_sessions(
-                user_id=target.id,
-                reason="password_changed",
+                user_id=target_id,
+                browser_reason=BrowserSessionRevocationReason.PASSWORD_CHANGED,
             )
 
     async def delete(

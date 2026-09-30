@@ -1,7 +1,7 @@
 """Authorization checks for OAuth2 client administration services."""
 
-from app.errors import ForbiddenOperationError
-from app.security.dtos import UserPrincipalContext
+from app.core.errors.common import ForbiddenOperationError
+from app.security.principals import UserPrincipalContext
 
 
 def require_operator(operator_ctx: UserPrincipalContext) -> None:

@@ -1,32 +1,20 @@
-# ruff: noqa: PLR0913
 """Typed FastAPI extraction for shared OAuth2 token-grant inputs."""
 
 from typing import Annotated
 
-from fastapi import Depends, Form, Security
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi import Depends, Form
 
 from app.oauth2.grants.parsing import parse_token_grant
 from app.oauth2.grants.request import GrantRequest
-from app.oauth2.settings import OAuth2GrantType
+from app.oauth2.grants.types import OAuth2GrantType
 from app.oauth2.specs import OAuth2Specs
-
-
-oauth2_client_basic = HTTPBasic(
-    auto_error=False,
-    scheme_name="OAuth2ClientBasic",
-    description="OAuth2 confidential-client authentication.",
-)
-OAuth2ClientBasicDep = Annotated[
-    HTTPBasicCredentials | None,
-    Security(oauth2_client_basic),
-]
 
 
 class TokenRequestForm:
     """Typed raw form shared by all supported token grants."""
 
-    def __init__(
+    # FastAPI keeps protocol transport fields explicit for validation and OpenAPI.
+    def __init__(  # noqa: PLR0913
         self,
         *,
         grant_type: Annotated[OAuth2GrantType, Form()],

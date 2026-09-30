@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from typing import Annotated
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -29,7 +30,7 @@ class _StrictDTO(BaseModel):
 class OAuth2ClientPersistenceCreateDTO(_StrictDTO):
     """OAuth2 client creation data."""
 
-    client_id: Annotated[str, Field(max_length=OAuth2Specs.CLIENT_ID_LENGTH_MAX)]
+    client_id: UUID
     client_secret: str | None
     name: OAuth2ClientName
     grant_types: list[str]
@@ -58,6 +59,10 @@ class OAuth2ClientRegistrationDTO(_StrictDTO):
     is_active: bool = True
     user_organization_access: OAuth2ClientUserOrganizationAccess = (
         OAuth2ClientUserOrganizationAccess.UNRESTRICTED
+    )
+    user_organization_ids: list[UUID] = Field(
+        default_factory=list,
+        max_length=OAuth2Specs.CLIENT_ORGANIZATION_ASSIGNMENTS_MAX,
     )
 
 
@@ -90,7 +95,16 @@ class OAuth2ClientRegistryReplaceDTO(_StrictDTO):
     is_confidential: bool
     requires_consent: bool
     is_active: bool
+
+
+class OAuth2ClientUserOrganizationUpdateDTO(_StrictDTO):
+    """Atomic user-organization policy replacement input."""
+
     user_organization_access: OAuth2ClientUserOrganizationAccess
+    organization_ids: Annotated[
+        list[UUID],
+        Field(max_length=OAuth2Specs.CLIENT_ORGANIZATION_ASSIGNMENTS_MAX),
+    ]
 
 
 class OAuth2ClientMachineOrganizationUpdateDTO(_StrictDTO):
@@ -99,7 +113,7 @@ class OAuth2ClientMachineOrganizationUpdateDTO(_StrictDTO):
     machine_organization_access: OAuth2ClientMachineOrganizationAccess
     organization_ids: (
         Annotated[
-            list[str],
+            list[UUID],
             Field(max_length=OAuth2Specs.CLIENT_ORGANIZATION_ASSIGNMENTS_MAX),
         ]
         | None
@@ -109,7 +123,7 @@ class OAuth2ClientMachineOrganizationUpdateDTO(_StrictDTO):
 class OAuth2ClientReadDTO(_StrictDTO):
     """Internal OAuth2 client representation returned by services."""
 
-    client_id: str
+    client_id: UUID
     client_secret: str | None
     name: OAuth2ClientName
     grant_types: list[str]
@@ -126,7 +140,6 @@ class OAuth2ClientReadDTO(_StrictDTO):
     )
 
     model_config = ConfigDict(extra="forbid", from_attributes=True)
-    """Pydantic model configuration."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,7 +154,7 @@ class OAuth2ClientCreateResultDTO:
 class OAuth2ClientSecretDTO:
     """One-time replacement credential returned by the credential service."""
 
-    client_id: str
+    client_id: UUID
     client_secret: str
 
 
@@ -149,7 +162,7 @@ class OAuth2ClientSecretDTO:
 class OAuth2ClientOrganizationDTO:
     """Public organization identity attached to an OAuth2 client policy."""
 
-    organization_id: str
+    organization_id: UUID
     name: str | None
 
 
@@ -165,6 +178,6 @@ class OAuth2ClientUserOrganizationsDTO:
 class OAuth2ClientMachineOrganizationsDTO:
     """Machine organization policy and its explicit assignments."""
 
-    client_id: str
+    client_id: UUID
     machine_organization_access: OAuth2ClientMachineOrganizationAccess
-    organization_ids: list[str]
+    organization_ids: list[UUID]

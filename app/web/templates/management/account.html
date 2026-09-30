@@ -1,0 +1,31 @@
+{% extends "management/base.html" %}
+{% block title %}Account · Zero Auth Lite{% endblock %}
+{% block content %}
+  <header class="page-header">
+    <p class="eyebrow">Self-service</p>
+    <p class="muted">Update your personal profile.</p>
+  </header>
+  <section class="panel">
+    <h2>Profile</h2>
+    <form class="form-stack" method="post" action="/management/account">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="field">
+        <label for="email">Email</label>
+        <input id="email" name="email" type="email" maxlength="{{ form_constraints.email_max }}" value="{{ profile.email }}" required>
+        {% if profile.pending_email %}
+          <p class="hint">Pending verification: {{ profile.pending_email }}</p>
+        {% endif %}
+        <p class="field-hint">If you change your email, verify the new address before it replaces your current sign-in email.</p>
+      </div>
+      <div class="field">
+        <label for="first-name">First name</label>
+        <input id="first-name" name="first_name" maxlength="{{ form_constraints.first_name_max }}" value="{{ profile.first_name }}">
+      </div>
+      <div class="field">
+        <label for="last-name">Last name</label>
+        <input id="last-name" name="last_name" maxlength="{{ form_constraints.last_name_max }}" value="{{ profile.last_name }}">
+      </div>
+      <button class="button--primary" type="submit">Save profile</button>
+    </form>
+  </section>
+{% endblock %}

@@ -9,12 +9,18 @@ from app.identity.users.specs import UserSpecs
 
 UserFirstName = Annotated[
     str,
-    StringConstraints(max_length=UserSpecs.FIRST_NAME_LENGTH_MAX),
+    StringConstraints(
+        max_length=UserSpecs.FIRST_NAME_LENGTH_MAX,
+        pattern=r"^[^\r\n]*$",
+    ),
 ]
 
 UserLastName = Annotated[
     str,
-    StringConstraints(max_length=UserSpecs.LAST_NAME_LENGTH_MAX),
+    StringConstraints(
+        max_length=UserSpecs.LAST_NAME_LENGTH_MAX,
+        pattern=r"^[^\r\n]*$",
+    ),
 ]
 
 UserEmail = Annotated[

@@ -7,19 +7,20 @@ from typing import cast
 from app.db.models.organization import OrganizationDB
 from app.db.models.organization_membership import OrganizationMembershipDB
 from app.db.models.user import UserDB, UserEmailDB
-from app.enums import Role
-from app.events.base import BaseEvent
 from app.identity.services.lifecycle import UserLifecycleService
 from app.identity.users.emails import active_email_loader
-from app.identity.users.enums import OrganizationUserRole, UserEmailStatus
+from app.identity.users.enums import OrganizationMembershipRole, UserEmailStatus
+from app.notifications.event import NotificationEvent
 from app.password.pwdlib_hasher import PwdlibPasswordHasher
-from app.public_ids import PublicId
-from app.security.dtos import BrowserUserPrincipalContext
+from app.security.principals import BrowserUserPrincipalContext
+from app.security.roles import Role
 from app.security.session_revocation import SecuritySessionRevocationService
 from fastapi import FastAPI
 from sqlalchemy import insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import set_committed_value
+
+from tests.identifiers import PublicId
 
 
 TEST_PASSWORD = "S3cretPass1!"  # noqa: S105
@@ -49,14 +50,14 @@ class CreatedUser:
         return self.user.email
 
 
-class FakeEventPublisher:
+class FakeNotificationPublisher:
     """Record lifecycle events without dispatching them."""
 
     def __init__(self) -> None:
         """Initialize the event collection."""
-        self.events: list[BaseEvent] = []
+        self.events: list[NotificationEvent] = []
 
-    async def publish(self, event: BaseEvent) -> None:
+    async def publish(self, event: NotificationEvent) -> None:
         """Record one event."""
         self.events.append(event)
 
@@ -79,7 +80,7 @@ async def create_user(  # noqa: PLR0913
     organization_id: int,
     email: str,
     is_active: bool = True,
-    role: OrganizationUserRole = OrganizationUserRole.MEMBER,
+    role: OrganizationMembershipRole = OrganizationMembershipRole.MEMBER,
     is_operator: bool = False,
     email_verified: bool = True,
 ) -> CreatedUser:
@@ -139,7 +140,9 @@ def user_context(
     return BrowserUserPrincipalContext(
         user_id=user.id,
         organization_id=user.membership.organization_id,
-        session_id="test-session",
+        raw_session_id="test-session",
+        user_public_id=PublicId(user.public_id),
+        organization_public_id=PublicId(1),
         roles=frozenset({role}) if role is not None else frozenset(),
     )
 
@@ -148,13 +151,13 @@ def build_lifecycle(
     app: FastAPI,
     db_session: AsyncSession,
     *,
-    publisher: FakeEventPublisher | None = None,
+    publisher: FakeNotificationPublisher | None = None,
 ) -> UserLifecycleService:
     """Build the concrete lifecycle collaborators for a test transaction."""
     return UserLifecycleService(
         db_session=db_session,
         password_hasher=app.state.password_hasher,
-        event_publisher=publisher or FakeEventPublisher(),
+        notification_publisher=publisher or FakeNotificationPublisher(),
         security_revocation=SecuritySessionRevocationService(db_session=db_session),
         session_factory=app.state.core_session_factory,
     )

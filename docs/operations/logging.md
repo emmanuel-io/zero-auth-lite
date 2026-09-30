@@ -18,8 +18,8 @@ access controls belong to the deployment boundary.
 Essential security events use stable `event`, `outcome`, and `reason` fields.
 They cover browser login outcomes, browser and security-session revocation,
 OAuth2 client provisioning and credential changes, token issuance and
-revocation, and refresh-token rotation or reuse. Subjects and organizations
-use public `usr_...` and `org_...` identifiers; OAuth2 sessions use `oas_...`.
+revocation, and refresh-token rotation or reuse. Subjects, organizations,
+OAuth2 clients, and sessions use canonical UUIDv4 identifiers.
 Failed login attempts use a keyed email hash instead of the submitted address.
 For request-scoped mutations, `outcome=attempted` means that the mutation was
 prepared and flushed in the request transaction; the request dependency still
@@ -38,8 +38,8 @@ worker activity, use `cid:background` because no request correlation exists.
 When a request publishes a durable outbox event, its correlation ID is stored
 with that event. The delivery worker restores it while building, sending,
 retrying, and recording the result, so those later logs remain connected to
-the initiating request. Events created outside request handling and legacy
-rows without this metadata continue to use `cid:background`.
+the initiating request. Outbox events created outside request handling retain
+`cid:background` during delivery.
 Accepted UUID request IDs are normalized to the RFC 9562 hexadecimal
 representation: 16 bytes encoded as 32 lowercase hexadecimal characters
 without hyphens. The outbox column uses that same explicit length rather than
@@ -48,7 +48,7 @@ size with a W3C Trace ID, but Zero Auth Lite does not claim OpenTelemetry tracin
 semantics.
 Application `DEBUG` logging keeps the low-level `aiosqlite` driver and general
 SQLAlchemy internals at `WARNING`, while `sqlalchemy.engine` remains at `INFO`.
-This shows SQL statements, bound parameters, and transaction boundaries without
-logging each cursor callback. At application level `INFO` or above, SQL query
-logging is disabled. The database echo setting remains available for focused
-diagnostics outside this default profile.
+This shows SQL statements and transaction boundaries without logging bound
+parameter values or each cursor callback. At application level `INFO` or above,
+SQL query logging is disabled. The database echo setting remains available for
+focused diagnostics outside this default profile and also hides bound values.

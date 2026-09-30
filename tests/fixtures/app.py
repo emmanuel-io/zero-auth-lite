@@ -6,6 +6,7 @@ import os
 from collections.abc import AsyncIterator
 from datetime import datetime, UTC
 from pathlib import Path
+from typing import cast, TYPE_CHECKING
 
 import httpx
 import pytest
@@ -14,7 +15,7 @@ from app.db.models.oauth2_client import OAuth2ClientDB
 from app.db.models.organization import OrganizationDB
 from app.db.models.organization_membership import OrganizationMembershipDB
 from app.db.models.user import UserDB, UserEmailDB
-from app.identity.users.enums import OrganizationUserRole, UserEmailStatus
+from app.identity.users.enums import OrganizationMembershipRole, UserEmailStatus
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from fastapi import FastAPI
@@ -23,10 +24,15 @@ from sqlalchemy import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tests.fixtures.auth import UserCredentials
+from tests.identifiers import TEST_USER_CLIENT_ID
+
+
+if TYPE_CHECKING:
+    from sqlalchemy import Table
 
 
 os.environ.setdefault(
-    "ZA_SESSION__ID_HASH_SECRET",
+    "ZA_BROWSER_SESSION__HASH_SECRET",
     "test-session-id-hash-secret-with-more-than-32-bytes",
 )
 os.environ.setdefault(
@@ -73,16 +79,16 @@ async def app(  # noqa: PLR0915
     settings_overrides: dict[str, object],
 ) -> AsyncIterator[FastAPI]:
     """Create a FastAPI app with isolated test settings."""
-    prv_key_b64, pub_key_b64 = _raw_oauth2_key_pair_b64()
+    signing_private_key_b64, signing_public_key_b64 = _raw_oauth2_key_pair_b64()
     monkeypatch.setenv(
         "ZA_DB_PATH",
         str(tmp_path / "zero_auth.db"),
     )
-    monkeypatch.setenv("ZA_OAUTH2__PRV_KEY_B64", prv_key_b64)
-    monkeypatch.setenv("ZA_OAUTH2__PUB_KEY_B64", pub_key_b64)
-    monkeypatch.setenv("ZA_OAUTH2__JWT_ISSUER", "https://issuer.test")
-    monkeypatch.setenv("ZA_OAUTH2__JWT_AUDIENCE", "test-zero-auth-lite-api")
-    monkeypatch.setenv("ZA_OAUTH2__JWT_KEY_ID", "test-key")
+    monkeypatch.setenv("ZA_OAUTH2__SIGNING_PRIVATE_KEY_B64", signing_private_key_b64)
+    monkeypatch.setenv("ZA_OAUTH2__SIGNING_PUBLIC_KEY_B64", signing_public_key_b64)
+    monkeypatch.setenv("ZA_OAUTH2__ISSUER", "https://issuer.test")
+    monkeypatch.setenv("ZA_OAUTH2__ACCESS_TOKEN_AUDIENCE", "test-zero-auth-lite-api")
+    monkeypatch.setenv("ZA_OAUTH2__SIGNING_KEY_ID", "test-key")
     monkeypatch.setenv("ZA_OAUTH2__JWKS_ENABLED", "true")
     monkeypatch.setenv("ZA_OAUTH2__OIDC_ENABLED", "true")
     monkeypatch.setenv("ZA_OAUTH2__ALLOW_CLIENT_SECRET_POST", "false")
@@ -98,27 +104,25 @@ async def app(  # noqa: PLR0915
         "ZA_OAUTH2__TOKEN_HASH_SECRET",
         "test-oauth2-token-hash-secret-with-more-than-32-bytes",
     )
-    monkeypatch.setenv("ZA_SESSION__COOKIE_DOMAIN", "")
-    monkeypatch.setenv("ZA_SESSION__COOKIE_SECURE", "false")
+    monkeypatch.setenv("ZA_BROWSER_SESSION__COOKIE_DOMAIN", "")
+    monkeypatch.setenv("ZA_BROWSER_SESSION__COOKIE_SECURE", "false")
     monkeypatch.setenv(
-        "ZA_SESSION__ID_HASH_SECRET",
+        "ZA_BROWSER_SESSION__HASH_SECRET",
         "test-session-id-hash-secret-with-more-than-32-bytes",
     )
-    monkeypatch.setenv("ZA_SESSION__CSRF__COOKIE_DOMAIN", "")
-    monkeypatch.setenv("ZA_SESSION__CSRF__COOKIE_SECURE", "false")
+    monkeypatch.setenv("ZA_BROWSER_SESSION__CSRF__COOKIE_DOMAIN", "")
+    monkeypatch.setenv("ZA_BROWSER_SESSION__CSRF__COOKIE_SECURE", "false")
     monkeypatch.setenv("ZA_MAIL__ENABLED", "false")
-    monkeypatch.setenv("ZA_UI__AUTHENTICATION", "external")
     monkeypatch.setenv(
-        "ZA_UI__EXTERNAL_LOGIN_URL",
-        "https://frontend.test/login",
+        "ZA_UI__URLS__DEVICE_INTERACTION",
+        "https://auth.zero-auth-lite.localhost:8443/oauth2/device/verify",
     )
     monkeypatch.delenv("ZA_BOOTSTRAP__OPERATOR_EMAIL", raising=False)
     monkeypatch.delenv("ZA_BOOTSTRAP__OPERATOR_PASSWORD", raising=False)
     from app.db.base import Base
     from app.db.engine import create_engine, create_session_factory
-    from app.db.models.auth_event import AuthEventOutboxDB
-    from app.db.models.auth_token import UserAuthTokenDB
     from app.db.models.browser_session import BrowserSessionDB
+    from app.db.models.notification_outbox import NotificationOutboxDB
     from app.db.models.oauth2_authorization_code import (
         OAuth2AuthorizationCodeDB,
     )
@@ -134,20 +138,16 @@ async def app(  # noqa: PLR0915
         OAuth2DeviceAuthorizationDB,
     )
     from app.db.models.oauth2_session import OAuth2SessionDB
-    from app.db.models.oauth2_token_pair import (
+    from app.db.models.oauth2_token_state import (
         OAuth2RefreshTokenHistoryDB,
-        OAuth2TokenPairDB,
+        OAuth2TokenStateDB,
     )
     from app.db.models.organization import OrganizationDB
     from app.db.models.organization_membership import OrganizationMembershipDB
     from app.db.models.user import UserDB, UserEmailDB
-    from app.db.snowflake import (
-        acquire_snowflake_node_lease,
-        configure_snowflake_generator,
-        unconfigure_snowflake_generator,
-    )
+    from app.db.models.workflow_token import UserWorkflowTokenDB
     from app.main import create_app
-    from app.oauth2.oidc.keys import (
+    from app.oauth2.signing.keys import (
         get_signing_key,
         get_verify_key,
     )
@@ -180,39 +180,35 @@ async def app(  # noqa: PLR0915
     test_app.state.core_session_factory = create_session_factory(
         test_app.state.core_engine
     )
-    snowflake_lease = acquire_snowflake_node_lease(
-        lock_directory=tmp_path / "snowflake",
-        requested_node_id=None,
-    )
-    configure_snowflake_generator(snowflake_lease.node_id)
     try:
         async with test_app.state.core_engine.begin() as conn:
             await conn.run_sync(
                 Base.metadata.create_all,
-                tables=[
-                    OrganizationDB.__table__,
-                    UserDB.__table__,
-                    OrganizationMembershipDB.__table__,
-                    UserEmailDB.__table__,
-                    BrowserSessionDB.__table__,
-                    OAuth2ClientDB.__table__,
-                    OAuth2ClientUserOrganizationDB.__table__,
-                    OAuth2ClientMachineOrganizationDB.__table__,
-                    OAuth2AuthorizationCodeDB.__table__,
-                    OAuth2AuthorizationTransactionDB.__table__,
-                    OAuth2DeviceAuthorizationDB.__table__,
-                    OAuth2SessionDB.__table__,
-                    OAuth2TokenPairDB.__table__,
-                    OAuth2RefreshTokenHistoryDB.__table__,
-                    UserAuthTokenDB.__table__,
-                    AuthEventOutboxDB.__table__,
-                ],
+                tables=cast(
+                    "list[Table]",
+                    [
+                        OrganizationDB.__table__,
+                        UserDB.__table__,
+                        OrganizationMembershipDB.__table__,
+                        UserEmailDB.__table__,
+                        BrowserSessionDB.__table__,
+                        OAuth2ClientDB.__table__,
+                        OAuth2ClientUserOrganizationDB.__table__,
+                        OAuth2ClientMachineOrganizationDB.__table__,
+                        OAuth2AuthorizationCodeDB.__table__,
+                        OAuth2AuthorizationTransactionDB.__table__,
+                        OAuth2DeviceAuthorizationDB.__table__,
+                        OAuth2SessionDB.__table__,
+                        OAuth2TokenStateDB.__table__,
+                        OAuth2RefreshTokenHistoryDB.__table__,
+                        UserWorkflowTokenDB.__table__,
+                        NotificationOutboxDB.__table__,
+                    ],
+                ),
             )
         yield test_app
     finally:
         await test_app.state.core_engine.dispose()
-        unconfigure_snowflake_generator()
-        snowflake_lease.release()
 
     get_signing_key.cache_clear()
     get_verify_key.cache_clear()
@@ -286,12 +282,12 @@ async def verified_user_credentials(app: FastAPI) -> UserCredentials:
             OrganizationMembershipDB(
                 user_id=user.id,
                 organization_id=organization.id,
-                role=OrganizationUserRole.ADMIN,
+                role=OrganizationMembershipRole.ADMIN,
             )
         )
         session.add(
             OAuth2ClientDB(
-                client_id="test-user-client",
+                client_id=TEST_USER_CLIENT_ID,
                 client_secret=None,
                 name="Test User Client",
                 grant_types=["authorization_code", "refresh_token"],

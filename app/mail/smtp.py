@@ -1,7 +1,8 @@
-"""SMTP transactional mail provider."""
+"""SMTP mail delivery provider."""
 
 import asyncio
 import smtplib
+import ssl
 from email.message import EmailMessage as StdlibEmailMessage
 from email.utils import formataddr
 
@@ -11,11 +12,23 @@ from app.mail.settings import MailSettings
 
 
 class SMTPMailProvider:
-    """Send transactional email through SMTP."""
+    """Send authentication email through SMTP."""
 
     def __init__(self, settings: MailSettings) -> None:
         """Initialize the provider with its SMTP connection settings."""
         self.settings = settings
+        self._tls_context = (
+            ssl.create_default_context()
+            if settings.smtp_ssl or settings.smtp_starttls
+            else None
+        )
+
+    def _require_tls_context(self) -> ssl.SSLContext:
+        """Return the verifying context required by an enabled TLS mode."""
+        if self._tls_context is None:
+            msg = "SMTP TLS is enabled without a verification context"
+            raise RuntimeError(msg)
+        return self._tls_context
 
     async def send(self, message: EmailMessage) -> None:
         """Send a message without blocking the application event loop.
@@ -39,6 +52,7 @@ class SMTPMailProvider:
                     self.settings.smtp_host,
                     self.settings.smtp_port,
                     timeout=self.settings.smtp_timeout_seconds,
+                    context=self._require_tls_context(),
                 ) as server:
                     self._authenticate(server)
                     server.send_message(mime_message, to_addrs=recipients)
@@ -49,13 +63,13 @@ class SMTPMailProvider:
                 timeout=self.settings.smtp_timeout_seconds,
             ) as server:
                 if self.settings.smtp_starttls:
-                    server.starttls()
+                    server.starttls(context=self._require_tls_context())
                 self._authenticate(server)
                 server.send_message(mime_message, to_addrs=recipients)
         except smtplib.SMTPException as exc:
-            raise MailDeliveryError(str(exc)) from exc
+            raise MailDeliveryError from exc
         except OSError as exc:
-            raise MailDeliveryError(str(exc)) from exc
+            raise MailDeliveryError from exc
 
     def _authenticate(self, server: smtplib.SMTP) -> None:
         """Authenticate when SMTP credentials are configured."""

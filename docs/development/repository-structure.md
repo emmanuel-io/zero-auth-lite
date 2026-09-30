@@ -4,11 +4,12 @@
 .
 ├── app/
 │   ├── main.py                 # Canonical FastAPI entrypoint
+│   ├── openapi.py              # Global OpenAPI policy composition
 │   ├── browser_sessions/       # Browser sessions, CSRF, cookies, and services
-│   ├── oauth2/                 # OAuth2/OIDC flows, including user_authorizations
-│   ├── auth_tokens/            # Single-use verification/reset token lifecycle
+│   ├── oauth2/                 # OAuth2/OIDC flows and scoped session administration
+│   ├── workflow_tokens/        # Single-use verification/reset token lifecycle
 │   ├── bootstrap/              # First-run operator creation and process lock
-│   ├── events/                 # Durable notification outbox and worker
+│   ├── notifications/          # Durable authentication notifications and worker
 │   ├── web/                    # Optional built-in Jinja browser presentation
 │   ├── identity/               # Identity DTOs, registration, services, and persistence mapping
 │   ├── password/               # Password hashing protocol and implementation
@@ -42,23 +43,32 @@ Zero Auth Lite is organized as one configurable authentication and authorization
 server. Feature folders own their domain behavior, HTTP dependencies, routes,
 and persistence. `app/main.py` is the server entrypoint: it attaches stable
 app state, always mounts the identity-management baseline, and composes the
-configured authentication and protocol mechanisms.
+configured authentication mechanisms and protocol surfaces.
 
-Identity workflows, auth-token processing, identity and organization
+Identity workflows, workflow-token processing, identity and organization
 administration, and outbox dispatch are permanent server capabilities. Browser
 sessions, OAuth2, OIDC, and JWKS are configurable mechanisms. The built-in
-workflow HTML pages are an optional presentation layer controlled by
-`ui.authentication`; authorization roles, permissions, and access checks
-remain part of the permanent baseline.
+workflow HTML pages are controlled by `ui.identity_workflow_mode`. Session-backed
+organization and operator presentation is independently controlled by
+`ui.organization_admin_enabled` and `ui.operator_enabled`; authorization
+roles, permissions, and access checks remain part of the permanent baseline.
 
 `app/security/authentication.py` composes browser-session and OAuth2
-authentication into canonical principal contexts.
+authentication into the canonical contexts defined by
+`app/security/principals.py`; `app/security/roles.py` owns application role
+identifiers.
 `app/security/authorization.py` owns the FastAPI dependencies that enforce
 roles, permissions, and OAuth2 scopes. The package also owns the transactional
 `session_revocation` boundary that invalidates browser and OAuth2 sessions
 together. Feature-neutral constant-time
 comparison helpers remain under `app/core/compare.py`; `core` does not compose
 feature implementations.
+
+`app/openapi.py` is the application-level OpenAPI orchestrator. Generic schema
+transformations remain in `app/core/openapi.py`, OAuth2/OIDC protocol
+transformations remain in `app/oauth2/openapi.py`, and application API security
+policy remains in `app/security/openapi.py`. This keeps `app/core/` independent
+of feature domains while making the global ordering visible at the root.
 
 Authorization has two deliberate layers. FastAPI dependencies enforce the
 complete HTTP contract: required roles, application permissions, OAuth2 scopes,
@@ -71,7 +81,8 @@ Black-box HTTP behavior is tested under `tests/routes/` with HTTPX, the real
 FastAPI lifespan, and isolated migrated databases. Tests under `tests/app/`
 exercise feature-level services, routers, validation, and generated
 OpenAPI contracts without claiming ownership of the black-box route surface.
-Reusable setup and test-data builders live under `tests/fixtures/`.
+Reusable setup and test-data builders live under `tests/fixtures/`. Shared fake
+service implementations used by isolated feature tests live under `tests/mocks/`.
 
 `app/api/v1/` is not generic application CRUD. It is the minimal identity and
 organization administration surface needed to operate the authentication server:
@@ -81,12 +92,12 @@ when at least one grant is enabled, OAuth2 client administration.
 Server-operator OAuth2 client administration is composed from separate route
 modules for registry operations, credential rotation, user-organization access,
 and machine-organization access. Their URLs remain under
-`/api/v1/admin/oauth2/clients`.
+`/api/v1/server/oauth2/clients`.
 
 Route ownership follows a simple mount rule:
 
 - `app/main.py` mounts only top-level server surfaces such as `/oauth2`,
-  `/api`, `/health`, and the settings-driven built-in web UI.
+  `/api`, `/health/*`, and the settings-driven built-in web UI.
 - `app/web/` owns HTML adapters and assets, while authentication and protocol
   services continue to own validation and business behavior.
 - `app/api/v1/` contains only versioned API modules.
@@ -97,9 +108,26 @@ Route ownership follows a simple mount rule:
 - Browser-session behavior stays in `app/browser_sessions/`; its JSON transport
   adapter lives in `app/api/v1/browser_sessions/`, and the versioned route
   composition belongs to `app/api/v1/router.py`.
-- Current-user OAuth2 grant inspection and revocation lives in
-  `app/oauth2/user_authorizations/`; its HTTP route remains
-  `/api/v1/me/authorizations`.
+- External OAuth2 interaction adapters live in
+  `app/api/v1/oauth2_interactions/`; OAuth2 protocol validation and persisted
+  interaction state remain in `app/oauth2/`.
+- Current-user OAuth2 session inspection and revocation lives in
+  `app/oauth2/user_oauth2_sessions/`; its HTTP route is
+  `/api/v1/me/oauth2/sessions`.
+- Current-user profile and account operations live in
+  `app/api/v1/me/profile.py`. Its ordinary profile routes accept the configured
+  user authentication mechanisms, while password replacement and account
+  deletion are mounted only with browser sessions. This authentication policy
+  does not make those account operations part of session administration;
+  `app/api/v1/me/sessions.py` owns only browser-session listing and revocation.
+
+The management presentation is grouped under `app/web/management/`, including
+the dashboard and account self-service route. Actor-specific routes live under
+`operator/` and `organization/`; their small composers include user, session,
+and OAuth2-client routers only when the corresponding capability is enabled.
+Operator and organization user-session adapters declare their FastAPI routes
+explicitly. They share only actor-independent confirmation, mutation, cookie,
+and redirect behavior through `app/web/management/user_session_actions.py`.
 
 ## Persistence
 
@@ -117,12 +145,15 @@ that migration tool.
 `app/api/v1/auth/` owns the versioned authentication request schemas,
 domain-specific endpoint adapters, route paths, and startup-time composition.
 Its router mounts registration and new self-registration verification requests
-under `auth.registration_enabled`. Verification confirmation remains mounted
-for issued tokens, while email changes, password recovery, and invitation
-acceptance remain independently available.
-`app/identity/registration.py` owns the organization and initial-user transaction,
-while `app/auth_tokens/` owns single-use token issuance and confirmation.
-`app/events/` persists notification intentions in the request transaction and
+under `identity_workflow.registration_enabled`. Within an enabled interactive
+JSON transport, verification confirmation remains mounted for issued tokens,
+while email changes, password recovery, and invitation acceptance remain
+independently available. Built-in HTML confirmation is selected separately by
+the identity-workflow presentation mode.
+`app/identity/services/registration.py` owns the organization and initial-user
+transaction, while `app/workflow_tokens/` owns single-use token issuance and
+confirmation.
+`app/notifications/` persists notification intentions in the request transaction and
 builds them after commit, while `app/mail/` owns rendering and SMTP
 integration. This keeps HTTP transport, identity lifecycle, token lifecycle,
 and delivery infrastructure as explicit boundaries.
@@ -130,12 +161,19 @@ and delivery infrastructure as explicit boundaries.
 implementation; an embedding application can supply another asynchronous
 provider without adding vendor-specific integrations to the server itself.
 
-Feature-local `dtos.py` modules contain service inputs and outputs, all named
-with a `DTO` suffix. Services own the SQLAlchemy queries supporting their domain
-decisions and do not import `app/api/`. Application-owned HTTP request and
-response models live beside their versioned routers under `app/api/v1/` and use
-`Request` or `Response` suffixes. Standardized OAuth2 and OIDC protocol routes
-retain their protocol-local transport models and typed FastAPI extraction.
+Feature-local `dtos.py` modules contain reusable service-boundary and
+persistence shapes, named with a `DTO` suffix. Use Pydantic models when data
+crosses a validation or ORM boundary. Small immutable values that are already
+validated may remain dataclasses beside the behavior that owns them, with a
+domain name such as `AccessTokenPayload`, `IssuedTokens`, or `ClientAuth`.
+Actor-specific DTOs may be normalized into an immutable, actor-neutral
+`*Command` in a feature-local `commands.py` module when one lifecycle mutation
+needs a complete instruction independent of its caller.
+Services own the SQLAlchemy queries supporting their domain decisions and do
+not import `app/api/`. Application-owned HTTP request and response models live
+beside their versioned routers under `app/api/v1/` and use `Request` or
+`Response` suffixes. Standardized OAuth2 and OIDC protocol routes retain their
+protocol-local transport models and typed FastAPI extraction.
 
 OAuth2 grant handlers keep grant-specific authentication, authorization, and
 validation visible. Once those decisions are complete,

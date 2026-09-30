@@ -1,4 +1,3 @@
-# ruff: noqa: TC001, TC002
 """Reusable OAuth2 client authentication helpers for protocol endpoints.
 
 Implements RFC 6749 §2.3.1 and RFC 7009:
@@ -10,20 +9,26 @@ Implements RFC 6749 §2.3.1 and RFC 7009:
 
 from __future__ import annotations
 
-import base64
-import binascii
 from dataclasses import dataclass
 from logging import getLogger
-from typing import Literal
+from typing import Literal, TYPE_CHECKING
 
-from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, text, update
 
 from app.db.models.oauth2_client import OAuth2ClientDB
+from app.identifiers import parse_uuid4
 from app.oauth2.clients.dtos import OAuth2ClientReadDTO
+from app.oauth2.error_codes import OAuth2ErrorCode
 from app.oauth2.errors import InvalidClientError, OAuth2ProtocolError
-from app.password.async_hashing import verify_password
-from app.password.protocols import PasswordHasherProtocol
+from app.password.async_hashing import verify_and_update_password
+
+
+if TYPE_CHECKING:
+    from uuid import UUID
+
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.password.protocols import PasswordHasherProtocol
 
 
 logger = getLogger(__name__)
@@ -37,9 +42,17 @@ class ClientAuth:
     method: Literal["basic", "post", "public"]
 
     @property
-    def client_id(self) -> str:
+    def client_id(self) -> UUID:
         """Return the resolved client's public identifier."""
         return self.client.client_id
+
+
+@dataclass(slots=True, frozen=True)
+class BasicClientCredentials:
+    """Decoded credentials supplied through `client_secret_basic`."""
+
+    client_id: str
+    client_secret: str
 
 
 async def lock_and_reload_token_client(
@@ -47,20 +60,20 @@ async def lock_and_reload_token_client(
 ) -> ClientAuth | None:
     """Lock and reload a token client after credential verification.
 
-    Confidential-secret verification runs outside the SQLite transaction. The
-    no-op update starts the short token-issuance write transaction, then the
-    fresh row prevents a concurrent secret rotation or policy reduction from
-    issuing a token from stale client state.
+    The caller must first finish any client-authentication or grant-state read
+    transaction. This no-op update then starts the short token-issuance write
+    transaction. The fresh row prevents a concurrent secret rotation or policy
+    reduction from issuing a token from stale client state, and the caller must
+    retain this transaction through token issuance.
     """
     if client_auth is None:
         return None
 
-    await db_session.commit()
     locked_client_id = await db_session.scalar(
         text(
             "UPDATE oauth2_client SET id = id WHERE client_id = :client_id RETURNING id"
         ),
-        {"client_id": client_auth.client_id},
+        {"client_id": client_auth.client_id.hex},
     )
     if locked_client_id is None:
         raise InvalidClientError(challenge_basic=client_auth.method == "basic")
@@ -85,48 +98,9 @@ async def lock_and_reload_token_client(
     return ClientAuth(client=current, method=client_auth.method)
 
 
-def _parse_basic_header(authorization: str) -> tuple[str, str]:
-    """Parse `Authorization: Basic base64(client_id:client_secret)`.
-
-    Args:
-        authorization: Full Authorization header value.
-
-    Returns:
-        Tuple (client_id, client_secret).
-
-    Raises:
-        InvalidClientError: If the header is malformed or unsupported.
-    """
-    if not authorization.startswith("Basic "):
-        raise InvalidClientError(challenge_basic=True)
-    try:
-        payload = authorization.split(" ", 1)[1]
-        decoded = base64.b64decode(payload, validate=True).decode("utf-8")
-        client_id, client_secret = decoded.split(":", 1)
-    except (binascii.Error, UnicodeDecodeError, ValueError) as exc:
-        raise InvalidClientError(challenge_basic=True) from exc
-    else:
-        if not client_id:
-            logger.error("empty client_id in Basic auth")
-            raise InvalidClientError(challenge_basic=True)
-        return client_id, client_secret
-
-
-def _form_text(value: object | None) -> str | None:
-    """Return a form value as text when it is a simple string.
-
-    Args:
-        value (object | None): Raw value read from a request form.
-
-    Returns:
-        str | None: Text value, or None for missing/non-text values.
-    """
-    return value if isinstance(value, str) else None
-
-
 async def _get_client_auth_basic(
     db_session: AsyncSession,
-    authorization: str,
+    credentials: BasicClientCredentials,
     password_hasher: PasswordHasherProtocol,
 ) -> ClientAuth:
     """Authenticate a confidential client from an HTTP Basic header.
@@ -134,31 +108,38 @@ async def _get_client_auth_basic(
     The endpoint boundary rejects requests that combine Basic and body
     credentials before calling this helper.
 
-    Returns:
-        ClientAuth: The authenticated confidential client and Basic method.
-
     Raises:
         InvalidClientError: If the header or client credentials are invalid.
     """
-    basic_client_id, basic_client_secret = _parse_basic_header(authorization)
+    basic_client_id = credentials.client_id
+    basic_client_secret = credentials.client_secret
+    if not basic_client_id:
+        logger.error("empty client_id in Basic auth")
+        raise InvalidClientError(challenge_basic=True)
+    try:
+        parsed_client_id = parse_uuid4(basic_client_id)
+    except ValueError as exc:
+        raise InvalidClientError(challenge_basic=True) from exc
     row = await db_session.scalar(
-        select(OAuth2ClientDB).where(OAuth2ClientDB.client_id == basic_client_id)
+        select(OAuth2ClientDB).where(OAuth2ClientDB.client_id == parsed_client_id)
     )
     client = OAuth2ClientReadDTO.model_validate(row) if row is not None else None
     # Client authentication is a route-boundary read. Release SQLite's read
     # transaction before the deliberately expensive secret verification.
     await db_session.commit()
-    if (
-        client is None
-        or not client.is_active
-        or not client.is_confidential
-        or client.client_secret is None
-        or not await verify_password(
-            password_hasher,
-            password=basic_client_secret,
-            password_hash=client.client_secret,
+    if client is None or not client.is_active or not client.is_confidential:
+        logger.warning(
+            "OAuth2 client authentication failed client_id=%s method=basic",
+            basic_client_id,
         )
-    ):
+        raise InvalidClientError(challenge_basic=True)
+    client = await _verify_and_upgrade_client_secret(
+        db_session=db_session,
+        password_hasher=password_hasher,
+        client=client,
+        client_secret=basic_client_secret,
+    )
+    if client is None:
         logger.warning(
             "OAuth2 client authentication failed client_id=%s method=basic",
             basic_client_id,
@@ -170,13 +151,45 @@ async def _get_client_auth_basic(
     )
 
 
+async def _verify_and_upgrade_client_secret(
+    *,
+    db_session: AsyncSession,
+    password_hasher: PasswordHasherProtocol,
+    client: OAuth2ClientReadDTO,
+    client_secret: str,
+) -> OAuth2ClientReadDTO | None:
+    """Verify a client secret and conditionally persist its replacement hash."""
+    if client.client_secret is None:
+        return None
+    valid, replacement_hash = await verify_and_update_password(
+        password_hasher,
+        password=client_secret,
+        password_hash=client.client_secret,
+    )
+    if not valid:
+        return None
+    if replacement_hash is None:
+        return client
+    updated_client_id = await db_session.scalar(
+        update(OAuth2ClientDB)
+        .where(OAuth2ClientDB.client_id == client.client_id)
+        .where(OAuth2ClientDB.client_secret == client.client_secret)
+        .values(client_secret=replacement_hash)
+        .returning(OAuth2ClientDB.id)
+    )
+    await db_session.commit()
+    if updated_client_id is None:
+        return None
+    return client.model_copy(update={"client_secret": replacement_hash})
+
+
 # Typed header and form credentials remain distinct because OAuth2 assigns
 # different precedence and validation rules to each transport.
 async def authenticate_token_client(  # noqa: PLR0913
     *,
     db_session: AsyncSession,
     password_hasher: PasswordHasherProtocol,
-    authorization: str | None = None,
+    basic_credentials: BasicClientCredentials | None = None,
     client_id: str | None = None,
     client_secret: str | None = None,
     allow_client_secret_post: bool = True,
@@ -190,37 +203,38 @@ async def authenticate_token_client(  # noqa: PLR0913
         - If client_secret_post is disabled and a secret is sent in body
           → 400 invalid_request.
 
-    Returns:
-        ClientAuth describing the authenticated/identified client.
-
     Raises:
         OAuth2ProtocolError: If the request is invalid.
     """
-    if authorization is not None and (
+    if basic_credentials is not None and (
         client_id is not None or client_secret is not None
     ):
         raise OAuth2ProtocolError(
-            error="invalid_request",
+            error=OAuth2ErrorCode.INVALID_REQUEST,
             error_description="Do not send credentials in both header and body.",
         )
 
-    if authorization is not None:
+    if basic_credentials is not None:
         return await _get_client_auth_basic(
             db_session=db_session,
-            authorization=authorization,
+            credentials=basic_credentials,
             password_hasher=password_hasher,
         )
 
     if not client_id:
         raise OAuth2ProtocolError(
-            error="invalid_request",
+            error=OAuth2ErrorCode.INVALID_REQUEST,
             error_description=(
                 "client_id required in body when Authorization header is absent."
             ),
         )
+    try:
+        parsed_client_id = parse_uuid4(client_id)
+    except ValueError as exc:
+        raise InvalidClientError from exc
 
     row = await db_session.scalar(
-        select(OAuth2ClientDB).where(OAuth2ClientDB.client_id == client_id)
+        select(OAuth2ClientDB).where(OAuth2ClientDB.client_id == parsed_client_id)
     )
     client = OAuth2ClientReadDTO.model_validate(row) if row is not None else None
     if client is None:
@@ -251,19 +265,20 @@ async def authenticate_token_client(  # noqa: PLR0913
                 ),
                 client_id,
             )
-            raise OAuth2ProtocolError(error="invalid_request")
+            raise OAuth2ProtocolError(error=OAuth2ErrorCode.INVALID_REQUEST)
         # Public-client identification stays in the grant transaction. Only
         # confidential secret verification needs the early read boundary.
         await db_session.commit()
-        if (
-            not client.is_confidential
-            or client.client_secret is None
-            or not await verify_password(
-                password_hasher,
-                password=client_secret,
-                password_hash=client.client_secret,
+        if client.is_confidential:
+            client = await _verify_and_upgrade_client_secret(
+                db_session=db_session,
+                password_hasher=password_hasher,
+                client=client,
+                client_secret=client_secret,
             )
-        ):
+        else:
+            client = None
+        if client is None:
             logger.warning(
                 "OAuth2 client authentication failed client_id=%s method=post",
                 client_id,

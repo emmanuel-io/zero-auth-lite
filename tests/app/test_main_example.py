@@ -5,10 +5,13 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
-from app.db.snowflake import configured_snowflake_node_id
 from app.main import create_app
 from app.settings.root import Settings
-from app.web.settings import AuthenticationUIMode, UISettings
+from app.settings.ui import (
+    IdentityWorkflowUIMode,
+    ManagementAuthenticationMode,
+    UISettings,
+)
 from asgi_lifespan import LifespanManager
 from fastapi import FastAPI, status
 from httpx import ASGITransport, AsyncClient
@@ -37,8 +40,12 @@ def local_example_app(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> FastAP
     return create_app(
         Settings(
             ui=UISettings(
-                authentication=AuthenticationUIMode.EXTERNAL,
-                external_login_url=EXTERNAL_LOGIN_URL,
+                identity_workflow_mode=IdentityWorkflowUIMode.EXTERNAL,
+                management_authentication=ManagementAuthenticationMode.EXTERNAL,
+                urls={
+                    "login": EXTERNAL_LOGIN_URL,
+                    "logout": "https://frontend.test/logout",
+                },
             ),
         )
     )
@@ -49,22 +56,28 @@ def test_full_server_example_imports_and_registers_auth_routes() -> None:
     app = create_app(
         Settings(
             ui=UISettings(
-                authentication=AuthenticationUIMode.EXTERNAL,
-                external_login_url=EXTERNAL_LOGIN_URL,
+                identity_workflow_mode=IdentityWorkflowUIMode.EXTERNAL,
+                management_authentication=ManagementAuthenticationMode.EXTERNAL,
+                urls={
+                    "login": EXTERNAL_LOGIN_URL,
+                    "logout": "https://frontend.test/logout",
+                },
             ),
         )
     )
 
     assert isinstance(app, FastAPI)
     paths = set(app.openapi()["paths"])
-    assert "/health" in paths
+    assert "/health/live" in paths
+    assert "/health/ready" in paths
+    assert "/health" not in paths
     assert "/api/v1/sessions/login" in paths
     assert "/api/v1/auth/register" in paths
     assert "/api/v1/me/sessions" in paths
     assert "/api/v1/me" in paths
-    assert "/api/v1/admin/organizations" in paths
-    assert "/api/v1/admin/users" in paths
-    assert "/api/v1/admin/oauth2/clients" in paths
+    assert "/api/v1/server/organizations" in paths
+    assert "/api/v1/server/users" in paths
+    assert "/api/v1/server/oauth2/clients" in paths
     assert "/oauth2/token" in paths
     assert "/.well-known/oauth-authorization-server" in paths
     assert "/.well-known/openid-configuration" in paths
@@ -76,9 +89,6 @@ async def test_full_server_example_lifespan_starts(local_example_app: FastAPI) -
     """Assert the documented app can enter FastAPI lifespan."""
     async with LifespanManager(local_example_app):
         assert hasattr(local_example_app.state, "core_engine")
-        assert configured_snowflake_node_id() is not None
-
-    assert configured_snowflake_node_id() is None
 
 
 @pytest.mark.asyncio

@@ -1,0 +1,45 @@
+{% extends "management/base.html" %}
+{% block title %}Server sessions · Zero Auth Lite{% endblock %}
+{% block content %}
+  <header class="page-header">
+    <p class="eyebrow">Server operator</p>
+    <h1>Session maintenance</h1>
+    <p class="muted">Clean retained records or end authentication sessions across the server.</p>
+  </header>
+  <section class="panel">
+    <h2>Delete inactive browser sessions</h2>
+    <p class="muted">Delete one bounded cleanup batch of expired or revoked browser-session records.</p>
+    <form class="form-stack" method="post" action="/management/operator/sessions/cleanup">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label class="checkbox">
+        <input name="confirm" type="checkbox" value="true" required> Confirm cleanup</label>
+      <button class="button--primary" type="submit">Delete inactive browser sessions</button>
+    </form>
+  </section>
+  <div class="management-grid section-grid">
+    <section class="feature-card danger-panel">
+      <div>
+        <p class="feature-card__label">Browser authentication</p>
+        <h2>Delete all browser sessions</h2>
+        <p>Permanently delete every browser session across the server. OAuth2 sessions remain active.</p>
+      </div>
+      <a class="button button--danger" href="/management/operator/sessions/browser/delete">Delete all browser sessions</a>
+    </section>
+    <section class="feature-card danger-panel">
+      <div>
+        <p class="feature-card__label">OAuth2 sessions</p>
+        <h2>Delete all OAuth2 sessions</h2>
+        <p>Permanently delete every OAuth2 session family and its tokens. Browser sessions remain active.</p>
+      </div>
+      <a class="button button--danger" href="/management/operator/sessions/oauth2/delete">Delete all OAuth2 sessions</a>
+    </section>
+    <section class="feature-card danger-panel">
+      <div>
+        <p class="feature-card__label">All authentication</p>
+        <h2>Revoke all sessions</h2>
+        <p>End every browser and OAuth2 session across the server.</p>
+      </div>
+      <a class="button button--danger" href="/management/operator/sessions/revoke">Revoke all sessions</a>
+    </section>
+  </div>
+{% endblock %}

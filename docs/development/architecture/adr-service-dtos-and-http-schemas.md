@@ -25,7 +25,10 @@ error translation as part of their public contract.
 ## Decision
 
 Application-owned HTTP request and response models live beside their versioned
-routers under `app/api/v1/`. Their names end in `Request` or `Response`.
+routers under `app/api/v1/`. Their names end in `Request`, `Response`, or
+`Query`. `Query` is reserved for a typed group of FastAPI query parameters; it
+is an HTTP transport model, not a service DTO. Names such as `*QueryRequest`
+would repeat the transport role without adding meaning.
 
 The cross-cutting application error envelope is the narrow exception. It lives
 with `AppError` under `app/core/errors/` because domain exceptions, FastAPI
@@ -38,6 +41,11 @@ principal contexts keep names that describe their role. A versioned route
 converts its request schema to a DTO before calling a service and exposes a
 response schema rather than returning a service type as its public contract.
 Services do not import modules under `app/api/`.
+
+An actor-neutral lifecycle mutation may normalize several actor-specific DTOs
+into one feature-local command. These immutable `*Command` models live in a
+`commands.py` module and describe the complete instruction consumed by the
+mutation service; they are not transport schemas or general service DTOs.
 
 Standardized OAuth2 and OIDC protocol routes remain an explicit exception. Their
 transport models may stay with their protocol implementation because request
@@ -66,12 +74,14 @@ Their service DTOs carry typed public identifiers. The versioned route parses
 incoming serialized identifiers, and its response schema owns prefixes and
 field aliases as required by the API-identifier ADR.
 
-OAuth2 client-administration routes catch service errors and translate them at
-each endpoint. This repetition is a deliberate, personal project style rather
-than a general FastAPI requirement: the local `try`/`except` keeps the transport
-boundary and its documented error mapping visible beside every operation. A
-global exception handler or decorator would remove repetition, but would also
-hide a decision that this reference server prefers to keep explicit.
+Each OAuth2 client-administration endpoint that can raise a service error catches
+and translates that error locally. Endpoints that cannot raise one need no
+ceremonial translation block. This repetition is a deliberate, personal project
+style rather than a general FastAPI requirement: the local `try`/`except` keeps
+the transport boundary and its documented error mapping visible beside every
+fallible operation. A global exception handler or decorator would remove
+repetition, but would also hide a decision that this reference server prefers to
+keep explicit.
 
 Client identifier and secret generation is centralized in one module. Policy
 narrowing continues to revoke affected sessions inside the service that owns the

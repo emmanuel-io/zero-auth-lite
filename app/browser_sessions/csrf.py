@@ -6,13 +6,15 @@ from fastapi import Request, Response
 
 from app.browser_sessions.enums import CSRFPattern
 from app.browser_sessions.errors import (
+    BrowserSessionInvalidError,
     CSRFCookieHeaderMismatchError,
     CSRFHeaderSessionMismatchError,
     CSRFMissingCookieError,
     CSRFMissingHeaderError,
-    SessionInvalidError,
+    CSRFRequestSourceMissingError,
+    CSRFRequestSourceUntrustedError,
 )
-from app.browser_sessions.lifecycle import SessionLifecycleService
+from app.browser_sessions.lifecycle import BrowserSessionLifecycleService
 from app.browser_sessions.settings import CSRFSettings
 from app.core.compare import constant_time_equals
 
@@ -50,7 +52,7 @@ def validate_request_origin(request: Request, csrf_settings: CSRFSettings) -> No
         return
     raw_origin = request.headers.get("origin") or request.headers.get("referer")
     if raw_origin is None:
-        raise CSRFMissingHeaderError
+        raise CSRFRequestSourceMissingError
     request_origin = f"{request.url.scheme}://{request.url.netloc}"
     trusted_origins = {request_origin, *csrf_settings.trusted_origins}
     if csrf_settings.public_origin is not None:
@@ -60,7 +62,7 @@ def validate_request_origin(request: Request, csrf_settings: CSRFSettings) -> No
         raw_origin.casefold() == "null" and _is_same_origin_document_navigation(request)
     )
     if not origin_is_trusted and not opaque_same_origin_navigation:
-        raise CSRFCookieHeaderMismatchError
+        raise CSRFRequestSourceUntrustedError
 
 
 def validate_double_submit_csrf(request: Request, csrf_settings: CSRFSettings) -> None:
@@ -79,14 +81,14 @@ def validate_double_submit_csrf(request: Request, csrf_settings: CSRFSettings) -
 async def require_logout_csrf_if_session_is_valid(
     *,
     request: Request,
-    lifecycle_service: SessionLifecycleService,
+    lifecycle_service: BrowserSessionLifecycleService,
     csrf_settings: CSRFSettings,
     session_id: str,
 ) -> bool:
     """Validate logout CSRF and report whether session authority remains valid."""
     try:
         session_csrf = await lifecycle_service.get_session_csrf(session_id=session_id)
-    except SessionInvalidError:
+    except BrowserSessionInvalidError:
         return False
 
     validate_request_origin(request=request, csrf_settings=csrf_settings)

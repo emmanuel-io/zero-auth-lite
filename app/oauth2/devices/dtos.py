@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime
+from uuid import UUID
 
 
 @dataclass(frozen=True, slots=True)
@@ -10,7 +11,7 @@ class DeviceAuthorizationCreateDTO:
 
     device_code_hash: str
     user_code_hash: str
-    client_id: str
+    client_id: UUID
     scope: str
     expires_at: datetime
     interval_seconds: int
@@ -29,3 +30,11 @@ class DeviceAuthorizationReadDTO(DeviceAuthorizationCreateDTO):
     denied_at: datetime | None = None
     used_at: datetime | None = None
     user_id: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class DeviceInteractionDTO:
+    """Safe device-authorization details shown to an authenticated user."""
+
+    client_name: str
+    scopes: tuple[str, ...]
