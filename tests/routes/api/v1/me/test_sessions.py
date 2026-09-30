@@ -20,6 +20,7 @@ from tests.routes.api.helpers import login_headers
 pytestmark = pytest.mark.api
 
 SESSIONS_PATH = "/api/v1/me/sessions"
+DEFAULT_PAGE_LIMIT = 50
 
 
 @pytest.mark.asyncio
@@ -34,7 +35,7 @@ async def test_user_can_list_current_session(
 
     assert response.status_code == status.HTTP_200_OK
     assert response.json()["offset"] == 0
-    assert response.json()["limit"] == 50
+    assert response.json()["limit"] == DEFAULT_PAGE_LIMIT
     assert response.json()["total"] == 1
     session = response.json()["items"][0]
     assert session["current"] is True
@@ -98,6 +99,7 @@ async def test_user_can_page_through_browser_sessions_with_tied_activity(
     verified_user_credentials: UserCredentials,
 ) -> None:
     """Page retained sessions in a stable order and count the selected state."""
+    page_size = 2
     await login_headers(client, verified_user_credentials)
     async with browser_client_factory() as second_browser:
         await login_headers(second_browser, verified_user_credentials)
@@ -126,22 +128,29 @@ async def test_user_can_page_through_browser_sessions_with_tied_activity(
         await db_session.commit()
 
     first = await client.get(
-        SESSIONS_PATH, params={"active_only": False, "offset": 0, "limit": 2}
+        SESSIONS_PATH,
+        params={"active_only": False, "offset": 0, "limit": page_size},
     )
     second = await client.get(
-        SESSIONS_PATH, params={"active_only": False, "offset": 2, "limit": 2}
+        SESSIONS_PATH,
+        params={"active_only": False, "offset": page_size, "limit": page_size},
     )
-    active = await client.get(SESSIONS_PATH, params={"limit": 2})
+    active = await client.get(SESSIONS_PATH, params={"limit": page_size})
 
-    assert first.status_code == second.status_code == active.status_code == 200
-    assert first.json()["total"] == second.json()["total"] == 3
+    assert (
+        first.status_code
+        == second.status_code
+        == active.status_code
+        == status.HTTP_200_OK
+    )
+    assert first.json()["total"] == second.json()["total"] == len(session_ids)
     assert first.json()["offset"] == 0
-    assert second.json()["offset"] == 2
-    assert first.json()["limit"] == second.json()["limit"] == 2
+    assert second.json()["offset"] == page_size
+    assert first.json()["limit"] == second.json()["limit"] == page_size
     all_ids = [item["id"] for page in (first, second) for item in page.json()["items"]]
     assert all_ids == sorted(session_ids, reverse=True)
-    assert len(set(all_ids)) == 3
-    assert active.json()["total"] == 2
+    assert len(set(all_ids)) == len(session_ids)
+    assert active.json()["total"] == len(session_ids) - 1
     assert expired_id not in {item["id"] for item in active.json()["items"]}
 
 

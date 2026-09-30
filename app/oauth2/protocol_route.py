@@ -8,6 +8,7 @@ from fastapi import Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
 
+from app.core.errors.base import AppError
 from app.db.errors import DatabaseBusyError
 from app.oauth2.error_codes import OAuth2ErrorCode
 from app.oauth2.errors import OAuth2ProtocolError
@@ -52,6 +53,8 @@ class OAuth2ProtocolRoute(APIRoute):
                     headers=exc.headers,
                 ) from exc
             except OAuth2ProtocolError:
+                raise
+            except AppError:
                 raise
             except Exception as exc:
                 logger.exception(

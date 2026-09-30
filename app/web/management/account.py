@@ -29,6 +29,7 @@ class AccountProfileForm(ManagementForm):
     first_name: UserFirstName
     last_name: UserLastName
 
+
 router = APIRouter(tags=[ACCOUNT_UI_TAG], route_class=ManagementPageRoute)
 
 

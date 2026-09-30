@@ -76,7 +76,7 @@ def _authorization_error_redirect(
     state: str | None,
 ) -> AuthorizationRedirect:
     """Build a redirect error only after the callback URI is trusted."""
-    query = {"error": error}
+    query: dict[str, str] = {"error": error.value}
     if state is not None:
         query["state"] = state
     separator = "&" if "?" in redirect_uri else "?"

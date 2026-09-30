@@ -89,9 +89,9 @@ def test_oauth2_client_create_and_replace_forms_have_distinct_fields(
     app: FastAPI,
 ) -> None:
     """Keep initial organization access out of the replacement transport."""
-    create_properties = _form_schema(
-        app, "/management/operator/oauth2/clients"
-    )["properties"]
+    create_properties = _form_schema(app, "/management/operator/oauth2/clients")[
+        "properties"
+    ]
     replace_properties = _form_schema(
         app, "/management/operator/oauth2/clients/{client_id}"
     )["properties"]

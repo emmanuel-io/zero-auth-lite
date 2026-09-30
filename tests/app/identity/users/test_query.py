@@ -88,6 +88,9 @@ def test_created_window_filter_accepts_largest_date() -> None:
     assert expression is not None
     assert "created_at >=" in str(expression)
     assert "created_at <" not in str(expression)
-    assert created_window_filter(
-        column=column("created_at"), created_from=None, created_to=date.max
-    ) is None
+    assert (
+        created_window_filter(
+            column=column("created_at"), created_from=None, created_to=date.max
+        )
+        is None
+    )

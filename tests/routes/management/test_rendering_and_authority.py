@@ -199,9 +199,7 @@ async def test_oauth2_client_form_validates_organization_id_lines_in_dto(
             **form,
             "organization_ids": "\n".join(
                 str(deterministic_uuid(index))
-                for index in range(
-                    OAuth2Specs.CLIENT_ORGANIZATION_ASSIGNMENTS_MAX + 1
-                )
+                for index in range(OAuth2Specs.CLIENT_ORGANIZATION_ASSIGNMENTS_MAX + 1)
             ),
         },
         headers={"Origin": TEST_ORIGIN},

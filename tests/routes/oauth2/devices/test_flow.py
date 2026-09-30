@@ -115,8 +115,7 @@ async def test_device_authorization_rejects_repeated_scope(
     response = await client.post(
         "/oauth2/device_authorization",
         content=(
-            f"client_id={deterministic_uuid('device-client')}"
-            "&scope=read&scope=write"
+            f"client_id={deterministic_uuid('device-client')}&scope=read&scope=write"
         ),
         headers={"Content-Type": "application/x-www-form-urlencoded"},
     )

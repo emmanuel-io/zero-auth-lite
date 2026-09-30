@@ -20,7 +20,7 @@ class OAuth2ProtocolError(Exception):
     def __init__(
         self,
         *,
-        error: OAuth2ErrorCode,
+        error: object,
         status_code: int = status.HTTP_400_BAD_REQUEST,
         error_description: str | None = None,
         error_uri: str | None = None,
