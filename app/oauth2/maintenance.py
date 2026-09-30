@@ -8,7 +8,7 @@ from datetime import datetime, UTC
 from logging import getLogger
 from typing import Any, cast, TYPE_CHECKING
 
-from sqlalchemy import delete, exists, or_, select
+from sqlalchemy import delete, exists, or_, select, union
 
 from app.db.models.oauth2_authorization_code import (
     OAuth2AuthorizationCodeDB,
@@ -20,7 +20,7 @@ from app.db.models.oauth2_device_authorization import (
     OAuth2DeviceAuthorizationDB,
 )
 from app.db.models.oauth2_session import OAuth2SessionDB
-from app.db.models.oauth2_token_pair import OAuth2TokenPairDB
+from app.db.models.oauth2_token_state import OAuth2TokenStateDB
 
 
 if TYPE_CHECKING:
@@ -39,8 +39,39 @@ class OAuth2CleanupResult:
     authorization_codes: int
     authorization_transactions: int
     device_authorizations: int
-    token_pairs: int
+    token_states: int
     sessions: int
+
+
+def _combine_cleanup_results(
+    left: OAuth2CleanupResult, right: OAuth2CleanupResult
+) -> OAuth2CleanupResult:
+    """Add per-table cleanup counts without hiding their meaning."""
+    return OAuth2CleanupResult(
+        authorization_codes=left.authorization_codes + right.authorization_codes,
+        authorization_transactions=(
+            left.authorization_transactions + right.authorization_transactions
+        ),
+        device_authorizations=(
+            left.device_authorizations + right.device_authorizations
+        ),
+        token_states=left.token_states + right.token_states,
+        sessions=left.sessions + right.sessions,
+    )
+
+
+def _cleanup_may_have_more(result: OAuth2CleanupResult, *, batch_size: int) -> bool:
+    """Return whether any table filled its bounded batch."""
+    return any(
+        count == batch_size
+        for count in (
+            result.authorization_codes,
+            result.authorization_transactions,
+            result.device_authorizations,
+            result.token_states,
+            result.sessions,
+        )
+    )
 
 
 def _rowcount(result: Result[Any]) -> int:
@@ -56,15 +87,17 @@ async def run_oauth2_cleanup(
 ) -> OAuth2CleanupResult:
     """Delete bounded batches of expired or terminal OAuth2 rows."""
     cutoff = now or datetime.now(UTC)
+    authorization_code_candidates = union(
+        select(OAuth2AuthorizationCodeDB.id).where(
+            OAuth2AuthorizationCodeDB.expires_at <= cutoff
+        ),
+        select(OAuth2AuthorizationCodeDB.id).where(
+            OAuth2AuthorizationCodeDB.used_at.is_not(None)
+        ),
+    ).subquery()
     authorization_code_ids = (
-        select(OAuth2AuthorizationCodeDB.id)
-        .where(
-            or_(
-                OAuth2AuthorizationCodeDB.expires_at <= cutoff,
-                OAuth2AuthorizationCodeDB.used_at.is_not(None),
-            )
-        )
-        .order_by(OAuth2AuthorizationCodeDB.id)
+        select(authorization_code_candidates.c.id)
+        .order_by(authorization_code_candidates.c.id)
         .limit(batch_size)
     )
     authorization_codes = _rowcount(
@@ -74,15 +107,17 @@ async def run_oauth2_cleanup(
             )
         )
     )
+    authorization_transaction_candidates = union(
+        select(OAuth2AuthorizationTransactionDB.id).where(
+            OAuth2AuthorizationTransactionDB.expires_at <= cutoff
+        ),
+        select(OAuth2AuthorizationTransactionDB.id).where(
+            OAuth2AuthorizationTransactionDB.used_at.is_not(None)
+        ),
+    ).subquery()
     authorization_transaction_ids = (
-        select(OAuth2AuthorizationTransactionDB.id)
-        .where(
-            or_(
-                OAuth2AuthorizationTransactionDB.expires_at <= cutoff,
-                OAuth2AuthorizationTransactionDB.used_at.is_not(None),
-            )
-        )
-        .order_by(OAuth2AuthorizationTransactionDB.id)
+        select(authorization_transaction_candidates.c.id)
+        .order_by(authorization_transaction_candidates.c.id)
         .limit(batch_size)
     )
     authorization_transactions = _rowcount(
@@ -92,16 +127,20 @@ async def run_oauth2_cleanup(
             )
         )
     )
+    device_authorization_candidates = union(
+        select(OAuth2DeviceAuthorizationDB.id).where(
+            OAuth2DeviceAuthorizationDB.expires_at <= cutoff
+        ),
+        select(OAuth2DeviceAuthorizationDB.id).where(
+            OAuth2DeviceAuthorizationDB.used_at.is_not(None)
+        ),
+        select(OAuth2DeviceAuthorizationDB.id).where(
+            OAuth2DeviceAuthorizationDB.denied_at.is_not(None)
+        ),
+    ).subquery()
     device_authorization_ids = (
-        select(OAuth2DeviceAuthorizationDB.id)
-        .where(
-            or_(
-                OAuth2DeviceAuthorizationDB.expires_at <= cutoff,
-                OAuth2DeviceAuthorizationDB.used_at.is_not(None),
-                OAuth2DeviceAuthorizationDB.denied_at.is_not(None),
-            )
-        )
-        .order_by(OAuth2DeviceAuthorizationDB.id)
+        select(device_authorization_candidates.c.id)
+        .order_by(device_authorization_candidates.c.id)
         .limit(batch_size)
     )
     device_authorizations = _rowcount(
@@ -111,32 +150,32 @@ async def run_oauth2_cleanup(
             )
         )
     )
-    token_pair_session_ids = (
-        select(OAuth2TokenPairDB.session_id)
+    token_state_session_ids = (
+        select(OAuth2TokenStateDB.session_id)
         .where(
             or_(
-                OAuth2TokenPairDB.refresh_expires_at <= cutoff,
+                OAuth2TokenStateDB.refresh_expires_at <= cutoff,
                 (
-                    OAuth2TokenPairDB.refresh_expires_at.is_(None)
-                    & (OAuth2TokenPairDB.access_expires_at <= cutoff)
+                    OAuth2TokenStateDB.refresh_expires_at.is_(None)
+                    & (OAuth2TokenStateDB.access_expires_at <= cutoff)
                 ),
             )
         )
-        .order_by(OAuth2TokenPairDB.session_id)
+        .order_by(OAuth2TokenStateDB.session_id)
         .limit(batch_size)
     )
-    token_pairs = _rowcount(
+    token_states = _rowcount(
         await db_session.execute(
-            delete(OAuth2TokenPairDB).where(
-                OAuth2TokenPairDB.session_id.in_(token_pair_session_ids)
+            delete(OAuth2TokenStateDB).where(
+                OAuth2TokenStateDB.session_id.in_(token_state_session_ids)
             )
         )
     )
     session_terminal: ColumnElement[bool] = or_(
         OAuth2SessionDB.ended_at.is_not(None),
         ~exists(
-            select(OAuth2TokenPairDB.session_id).where(
-                OAuth2TokenPairDB.session_id == OAuth2SessionDB.id
+            select(OAuth2TokenStateDB.session_id).where(
+                OAuth2TokenStateDB.session_id == OAuth2SessionDB.id
             )
         ),
     )
@@ -156,20 +195,43 @@ async def run_oauth2_cleanup(
         authorization_codes=authorization_codes,
         authorization_transactions=authorization_transactions,
         device_authorizations=device_authorizations,
-        token_pairs=token_pairs,
+        token_states=token_states,
         sessions=sessions,
     )
     logger.info(
         "OAuth2 cleanup removed authorization_codes=%s "
         "authorization_transactions=%s device_authorizations=%s "
-        "token_pairs=%s sessions=%s",
+        "token_states=%s sessions=%s",
         result.authorization_codes,
         result.authorization_transactions,
         result.device_authorizations,
-        result.token_pairs,
+        result.token_states,
         result.sessions,
     )
     return result
+
+
+async def drain_oauth2_cleanup(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    batch_size: int,
+    stop_event: asyncio.Event | None = None,
+) -> OAuth2CleanupResult:
+    """Drain one finite snapshot through bounded cleanup transactions."""
+    cutoff = datetime.now(UTC)
+    total = OAuth2CleanupResult(0, 0, 0, 0, 0)
+    while stop_event is None or not stop_event.is_set():
+        async with session_factory() as db_session:
+            result = await run_oauth2_cleanup(
+                db_session=db_session,
+                now=cutoff,
+                batch_size=batch_size,
+            )
+        total = _combine_cleanup_results(total, result)
+        if not _cleanup_may_have_more(result, batch_size=batch_size):
+            break
+        await asyncio.sleep(0)
+    return total
 
 
 async def run_oauth2_cleanup_worker(
@@ -182,11 +244,11 @@ async def run_oauth2_cleanup_worker(
     """Run OAuth2 cleanup immediately and then at a fixed interval."""
     while not stop_event.is_set():
         try:
-            async with session_factory() as db_session:
-                await run_oauth2_cleanup(
-                    db_session=db_session,
-                    batch_size=batch_size,
-                )
+            await drain_oauth2_cleanup(
+                session_factory,
+                batch_size=batch_size,
+                stop_event=stop_event,
+            )
         except Exception:
             logger.exception("OAuth2 maintenance run failed")
         try:

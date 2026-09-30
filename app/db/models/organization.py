@@ -22,7 +22,13 @@ class OrganizationDB(Base, PublicIdMixin, CreatedAtMixin, UpdatedAtMixin):
     """SQLAlchemy model representing an organization."""
 
     __tablename__ = "organization"
-    __table_args__ = (CheckConstraint("length(trim(name)) > 0", name="name_not_blank"),)
+    __table_args__ = (
+        CheckConstraint("length(trim(name)) > 0", name="name_not_blank"),
+        CheckConstraint(
+            "instr(name, char(13)) = 0 AND instr(name, char(10)) = 0",
+            name="name_no_line_breaks",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(
         Integer,

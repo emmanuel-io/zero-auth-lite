@@ -4,28 +4,10 @@ from typing import Annotated, Literal
 
 from pydantic import AnyUrl, BaseModel, Field, UrlConstraints
 
+from app.oauth2.error_codes import OAuth2ErrorCode
+
 
 IssuerUrl = Annotated[AnyUrl, UrlConstraints(preserve_empty_path=True)]
-
-
-OAuth2ErrorCode = Literal[
-    "invalid_request",
-    "invalid_client",
-    "invalid_grant",
-    "unauthorized_client",
-    "unsupported_grant_type",
-    "invalid_scope",
-    "access_denied",
-    "authorization_pending",
-    "slow_down",
-    "expired_token",
-    "unsupported_token_type",
-    "unsupported_response_type",
-    "server_error",
-    "temporarily_unavailable",
-    "invalid_token",
-    "insufficient_scope",
-]
 
 
 class OAuth2ErrorResponse(BaseModel):
@@ -36,7 +18,7 @@ class OAuth2ErrorResponse(BaseModel):
     error_uri: AnyUrl | None = None
 
 
-class TokenPair(BaseModel):
+class OAuth2TokenResponse(BaseModel):
     """Access-token response with optional refresh and OpenID Connect tokens."""
 
     access_token: Annotated[str, Field(description="Signed JWT access token")]

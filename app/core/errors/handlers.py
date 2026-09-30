@@ -30,13 +30,7 @@ def _log_http_error(
     context: dict[str, Any],
     status_code: int,
 ) -> None:
-    """Log expected HTTP errors at a severity matching their status code.
-
-    Args:
-        message: Human-readable error message.
-        context: Structured error context.
-        status_code: HTTP status code on the exception.
-    """
+    """Log an expected HTTP error at the severity implied by its status."""
     if status_code >= status.HTTP_500_INTERNAL_SERVER_ERROR:
         logger.error("http_error", extra={"error_message": message, "context": context})
         return
@@ -48,15 +42,7 @@ def _http_error_payload(
     status_code: int,
     detail_any: object,
 ) -> ErrorResponse:
-    """Build a client-safe payload for expected HTTP exceptions.
-
-    Args:
-        status_code: HTTP status code on the exception.
-        detail_any: Raw exception detail.
-
-    Returns:
-        ErrorResponse: Serialized error response.
-    """
+    """Build a client-safe payload for an expected HTTP exception."""
     if status_code >= status.HTTP_500_INTERNAL_SERVER_ERROR:
         return ErrorResponse(
             code="INTERNAL_ERROR",
@@ -75,15 +61,7 @@ async def app_error_handler(
     request: Request,
     exc: AppError,
 ) -> JSONResponse:
-    """Serialize AppError to the unified ErrorResponse.
-
-    Args:
-        request: Incoming request whose app owns the settings snapshot.
-        exc: Raised application error.
-
-    Returns:
-        JSONResponse: Serialized error.
-    """
+    """Serialize an application error to the canonical response envelope."""
     settings = get_settings_snapshot(request.app)
     include_details = not (
         settings.app.environment == "deployment" and exc.redact_details_in_deployment
@@ -99,15 +77,7 @@ async def http_error_handler(
     request: Request,  # noqa: ARG001
     exc: StarletteHTTPException,
 ) -> JSONResponse:
-    """Serialize a FastAPI or Starlette HTTP exception into an ErrorResponse.
-
-    Args:
-        request: Incoming request (unused, kept for signature compatibility).
-        exc: Raised HTTP exception carrying status and detail.
-
-    Returns:
-        JSONResponse: JSON-encoded error payload with appropriate status code.
-    """
+    """Serialize a framework HTTP exception to the canonical envelope."""
     detail_any: Any = exc.detail
     message = detail_any if isinstance(detail_any, str) else "HTTP error"
 
@@ -135,14 +105,7 @@ async def validation_error_handler(
     def _normalize_validation_errors(
         errs: Sequence[Mapping[str, Any]],
     ) -> list[ErrorDetail]:
-        """Map Pydantic v2 validation errors into a compact, stable shape.
-
-        Args:
-            errs: Items from RequestValidationError.errors().
-
-        Returns:
-            Safe, structured validation details.
-        """
+        """Map Pydantic validation errors to stable, client-safe details."""
         out: list[ErrorDetail] = []
         for e in errs:
             loc = cast("Sequence[Any]", e.get("loc", ()))
@@ -184,7 +147,7 @@ async def unexpected_error_handler(
     request: Request,  # noqa: ARG001
     exc: Exception,
 ) -> JSONResponse:
-    """Safety-net for unexpected exceptions (do not leak internals)."""
+    """Return a client-safe response for an unexpected exception."""
     logger.error(
         "unexpected_error",
         exc_info=exc,

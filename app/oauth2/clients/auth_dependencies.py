@@ -1,36 +1,60 @@
-# ruff: noqa: PLR0913, TC001, TC002
 """FastAPI dependency wrappers for OAuth2 client authentication."""
 
 from __future__ import annotations
 
-import base64
-from logging import getLogger
 from typing import Annotated
+from urllib.parse import unquote_plus
 
-from fastapi import Depends, Form, Request
-from fastapi.security import HTTPBasicCredentials
+from fastapi import Depends, Form, HTTPException, Request, Security
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
-from app.db.dependencies import DbSessionDep
+# FastAPI resolves dependency annotations from module globals at runtime.
+from app.db.dependencies import DbSessionDep  # noqa: TC001
 from app.oauth2.clients.auth import (
     authenticate_token_client,
+    BasicClientCredentials,
     ClientAuth,
 )
 from app.oauth2.errors import InvalidClientError
-from app.oauth2.grants.dependencies import OAuth2ClientBasicDep
 from app.oauth2.specs import OAuth2Specs
-from app.password.dependencies import PasswordHasherDep
-from app.settings.dependencies import OAuth2SettingsDep
+from app.password.dependencies import PasswordHasherDep  # noqa: TC001
+from app.settings.dependencies import OAuth2SettingsDep  # noqa: TC001
 
 
-logger = getLogger(__name__)
+class OAuth2ClientHTTPBasic(HTTPBasic):
+    """Translate malformed Basic transport into an OAuth2 client error."""
+
+    async def __call__(  # type: ignore[override]
+        self, request: Request
+    ) -> HTTPBasicCredentials | None:
+        """Extract optional credentials without leaking FastAPI's error envelope."""
+        try:
+            return await super().__call__(request)
+        except HTTPException as exc:
+            raise InvalidClientError(challenge_basic=True) from exc
 
 
-def authorization_header(credentials: HTTPBasicCredentials | None) -> str | None:
-    """Recreate a Basic header for the framework-independent auth helper."""
+oauth2_client_basic = OAuth2ClientHTTPBasic(
+    auto_error=False,
+    scheme_name="OAuth2ClientBasic",
+    description="OAuth2 confidential-client authentication.",
+)
+OAuth2ClientBasicDep = Annotated[
+    HTTPBasicCredentials | None,
+    Security(oauth2_client_basic),
+]
+
+
+def decode_basic_credentials(
+    credentials: HTTPBasicCredentials | None,
+) -> BasicClientCredentials | None:
+    """Decode RFC 6749 form-encoded Basic credential components."""
     if credentials is None:
         return None
-    payload = f"{credentials.username}:{credentials.password}".encode()
-    return f"Basic {base64.b64encode(payload).decode()}"
+    return BasicClientCredentials(
+        client_id=unquote_plus(credentials.username),
+        client_secret=unquote_plus(credentials.password),
+    )
 
 
 async def form_credential(
@@ -46,7 +70,8 @@ async def form_credential(
     return raw_value if isinstance(raw_value, str) else None
 
 
-async def authenticate_token_client_for_grant(
+# FastAPI keeps protocol transport fields explicit for validation and OpenAPI.
+async def authenticate_token_client_for_grant(  # noqa: PLR0913
     *,
     request: Request,
     db_session: DbSessionDep,
@@ -64,7 +89,7 @@ async def authenticate_token_client_for_grant(
     ] = None,
 ) -> ClientAuth | None:
     """Authenticate OAuth2 clients only for grants that currently require it."""
-    authorization = authorization_header(basic_credentials)
+    decoded_basic_credentials = decode_basic_credentials(basic_credentials)
     client_id = await form_credential(
         request,
         name="client_id",
@@ -77,7 +102,11 @@ async def authenticate_token_client_for_grant(
     )
     if grant_type is not None and not settings.is_grant_enabled(grant_type):
         return None
-    if grant_type == "refresh_token" and not authorization and not client_id:
+    if (
+        grant_type == "refresh_token"
+        and decoded_basic_credentials is None
+        and not client_id
+    ):
         return None
     if grant_type not in {
         "authorization_code",
@@ -88,7 +117,7 @@ async def authenticate_token_client_for_grant(
         return None
     return await authenticate_token_client(
         db_session=db_session,
-        authorization=authorization,
+        basic_credentials=decoded_basic_credentials,
         client_id=client_id,
         client_secret=client_secret,
         allow_client_secret_post=settings.allow_client_secret_post,
@@ -96,7 +125,8 @@ async def authenticate_token_client_for_grant(
     )
 
 
-async def authenticate_revoke_client(
+# FastAPI keeps protocol transport fields explicit for validation and OpenAPI.
+async def authenticate_revoke_client(  # noqa: PLR0913
     *,
     request: Request,
     db_session: DbSessionDep,
@@ -111,7 +141,7 @@ async def authenticate_revoke_client(
     ] = None,
 ) -> ClientAuth:
     """Authenticate or identify an OAuth2 client for revoke/introspect routes."""
-    authorization = authorization_header(basic_credentials)
+    decoded_basic_credentials = decode_basic_credentials(basic_credentials)
     client_id = await form_credential(
         request,
         name="client_id",
@@ -124,7 +154,7 @@ async def authenticate_revoke_client(
     )
     return await authenticate_token_client(
         db_session=db_session,
-        authorization=authorization,
+        basic_credentials=decoded_basic_credentials,
         client_id=client_id,
         client_secret=client_secret,
         allow_client_secret_post=settings.allow_client_secret_post,

@@ -1,6 +1,7 @@
 """Behavior tests for database dependencies."""
 
 import sqlite3
+from typing import cast, TYPE_CHECKING
 
 import pytest
 from app.core.errors.handlers import app_error_handler
@@ -11,6 +12,10 @@ from app.settings.state import set_settings_snapshot
 from fastapi import FastAPI, status
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.exc import OperationalError
+
+
+if TYPE_CHECKING:
+    from starlette.types import ExceptionHandler
 
 
 pytestmark = pytest.mark.unit
@@ -37,11 +42,11 @@ class _SessionContext:
     """Minimal async context manager returned by a session factory."""
 
     def __init__(self, session: _FailingSession) -> None:
-        self.session = session
+        self.browser_session = session
 
     async def __aenter__(self) -> _FailingSession:
         """Return the fake session."""
-        return self.session
+        return self.browser_session
 
     async def __aexit__(self, *_args: object) -> None:
         """Leave cleanup to the dependency under test."""
@@ -77,7 +82,10 @@ async def test_sqlite_busy_commit_returns_retryable_service_unavailable() -> Non
     app = FastAPI()
     app.state.core_session_factory = lambda: _SessionContext(session)
     set_settings_snapshot(app, Settings())
-    app.add_exception_handler(DatabaseBusyError, app_error_handler)
+    app.add_exception_handler(
+        DatabaseBusyError,
+        cast("ExceptionHandler", app_error_handler),
+    )
 
     @app.post("/items", status_code=status.HTTP_201_CREATED)
     async def create_item(_db_session: DbSessionDep) -> dict[str, bool]:

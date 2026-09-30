@@ -36,3 +36,18 @@ statements. SQLite uniqueness constraints and the configured explicit
 transaction start protect collision and administrator invariants. External
 capabilities—password hashing, event publication, and mail delivery—remain
 protocol-based dependencies because they are genuine integration boundaries.
+
+An OAuth2 session's grant determines its principal shape. Client Credentials
+sessions have no user or organization columns, while Authorization Code and
+Device Code sessions require both. SQLite enforces this invariant and the
+issuance, Bearer-resolution, and introspection services validate it again so an
+inconsistent row fails closed.
+
+OAuth2 client organization-access modes are one deliberate cross-table
+exception. SQLite `CHECK` constraints protect the mode vocabulary, while
+foreign keys and composite primary keys protect assignment references and
+uniqueness. The cardinality of a mode and its assignment set is validated by
+the service that replaces both in one transaction. SQLite cannot defer a
+cross-table cardinality trigger until commit, so authorization reads validate
+that cardinality again and fail closed if data written outside those services
+is inconsistent.

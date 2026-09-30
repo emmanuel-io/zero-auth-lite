@@ -6,7 +6,7 @@ from typing import cast
 
 import httpx
 import pytest
-from app.oauth2.oidc.keys import get_verify_key
+from app.oauth2.signing.keys import get_verify_key
 from fastapi import FastAPI, status
 
 from tests.fixtures.auth import UserCredentials
@@ -38,7 +38,7 @@ async def test_jwks_endpoint_is_optional(
 
 
 @pytest.mark.asyncio
-@app_settings(oauth2={"jwks_enabled": True, "jwt_key_id": "test-main-key"})
+@app_settings(oauth2={"jwks_enabled": True, "signing_key_id": "test-main-key"})
 async def test_jwks_endpoint_returns_current_public_key(
     client: httpx.AsyncClient,
 ) -> None:
@@ -60,7 +60,7 @@ async def test_jwks_endpoint_returns_current_public_key(
 
 
 @pytest.mark.asyncio
-@app_settings(oauth2={"jwt_key_id": "test-main-key"})
+@app_settings(oauth2={"signing_key_id": "test-main-key"})
 async def test_access_token_includes_configured_kid(
     app: FastAPI,
     client: httpx.AsyncClient,

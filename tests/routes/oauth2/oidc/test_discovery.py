@@ -15,7 +15,7 @@ pytestmark = pytest.mark.api
 
 def _issuer_endpoint(app: FastAPI, path: str) -> str:
     """Return one application path on the configured issuer origin."""
-    issuer = urlsplit(app.state.settings.oauth2.jwt_issuer)
+    issuer = urlsplit(app.state.settings.oauth2.issuer)
     return f"{issuer.scheme}://{issuer.netloc}{path}"
 
 
@@ -26,12 +26,12 @@ async def test_oauth_authorization_server_metadata(
 ) -> None:
     """Assert OAuth2 metadata advertises the protocol endpoints."""
     response = await client.get(
-        authorization_server_metadata_path(app.state.settings.oauth2.jwt_issuer)
+        authorization_server_metadata_path(app.state.settings.oauth2.issuer)
     )
 
     assert response.status_code == status.HTTP_200_OK
     body = response.json()
-    assert body["issuer"] == app.state.settings.oauth2.jwt_issuer
+    assert body["issuer"] == app.state.settings.oauth2.issuer
     assert body["authorization_endpoint"] == _issuer_endpoint(app, "/oauth2/authorize")
     assert body["token_endpoint"] == _issuer_endpoint(app, "/oauth2/token")
     assert body["device_authorization_endpoint"] == (
@@ -66,7 +66,7 @@ async def test_oauth_authorization_server_metadata_reflects_enabled_grants(
 ) -> None:
     """Assert OAuth2 metadata declares the configured grant capabilities."""
     response = await client.get(
-        authorization_server_metadata_path(app.state.settings.oauth2.jwt_issuer)
+        authorization_server_metadata_path(app.state.settings.oauth2.issuer)
     )
 
     assert response.status_code == status.HTTP_200_OK
@@ -82,11 +82,12 @@ async def test_oauth_authorization_server_metadata_reflects_enabled_grants(
 
 @pytest.mark.asyncio
 @app_settings(
-    session={"enabled": False},
+    identity_workflow={"registration_enabled": False},
+    browser_session={"enabled": False},
     ui={"oauth2_interaction": "disabled"},
     oauth2={
         "authorization_code_enabled": False,
-        "refresh_token_enabled": True,
+        "refresh_token_enabled": False,
         "client_credentials_enabled": True,
         "device_code_enabled": False,
         "oidc_enabled": False,
@@ -98,7 +99,7 @@ async def test_machine_oauth2_metadata_omits_browser_capabilities(
 ) -> None:
     """Advertise only capabilities available without browser sessions."""
     response = await client.get(
-        authorization_server_metadata_path(app.state.settings.oauth2.jwt_issuer)
+        authorization_server_metadata_path(app.state.settings.oauth2.issuer)
     )
 
     assert response.status_code == status.HTTP_200_OK
@@ -106,10 +107,7 @@ async def test_machine_oauth2_metadata_omits_browser_capabilities(
     assert "authorization_endpoint" not in body
     assert body["response_types_supported"] == []
     assert body["code_challenge_methods_supported"] == []
-    assert body["grant_types_supported"] == [
-        "client_credentials",
-        "refresh_token",
-    ]
+    assert body["grant_types_supported"] == ["client_credentials"]
     assert "device_authorization_endpoint" not in body
 
 
@@ -129,7 +127,7 @@ async def test_oauth_metadata_advertises_device_code_when_enabled(
 ) -> None:
     """Assert OAuth2 metadata declares device code when it is enabled."""
     response = await client.get(
-        authorization_server_metadata_path(app.state.settings.oauth2.jwt_issuer)
+        authorization_server_metadata_path(app.state.settings.oauth2.issuer)
     )
 
     assert response.status_code == status.HTTP_200_OK
@@ -159,7 +157,7 @@ async def test_client_credentials_metadata_requires_client_authentication(
 ) -> None:
     """Do not advertise unauthenticated clients for a confidential-only grant."""
     response = await client.get(
-        authorization_server_metadata_path(app.state.settings.oauth2.jwt_issuer)
+        authorization_server_metadata_path(app.state.settings.oauth2.issuer)
     )
 
     assert response.status_code == status.HTTP_200_OK
@@ -170,14 +168,14 @@ async def test_client_credentials_metadata_requires_client_authentication(
 
 
 @pytest.mark.asyncio
-@app_settings(oauth2={"jwks_enabled": True, "jwt_key_id": "test-key"})
+@app_settings(oauth2={"jwks_enabled": True, "signing_key_id": "test-key"})
 async def test_oauth_authorization_server_metadata_includes_jwks_when_enabled(
     app: FastAPI,
     client: httpx.AsyncClient,
 ) -> None:
     """Assert metadata includes jwks_uri only when JWKS is enabled."""
     response = await client.get(
-        authorization_server_metadata_path(app.state.settings.oauth2.jwt_issuer)
+        authorization_server_metadata_path(app.state.settings.oauth2.issuer)
     )
 
     assert response.status_code == status.HTTP_200_OK
@@ -191,7 +189,7 @@ async def test_openid_configuration_is_disabled_by_default(
     client: httpx.AsyncClient,
 ) -> None:
     """Assert OIDC discovery is unavailable unless OIDC is enabled."""
-    issuer_path = urlsplit(app.state.settings.oauth2.jwt_issuer).path.rstrip("/")
+    issuer_path = urlsplit(app.state.settings.oauth2.issuer).path.rstrip("/")
 
     response = await client.get(f"{issuer_path}/.well-known/openid-configuration")
 
@@ -205,12 +203,12 @@ async def test_openid_configuration_when_enabled(
     client: httpx.AsyncClient,
 ) -> None:
     """Assert OIDC discovery advertises the optional OIDC endpoints."""
-    issuer_path = urlsplit(app.state.settings.oauth2.jwt_issuer).path.rstrip("/")
+    issuer_path = urlsplit(app.state.settings.oauth2.issuer).path.rstrip("/")
     response = await client.get(f"{issuer_path}/.well-known/openid-configuration")
 
     assert response.status_code == status.HTTP_200_OK
     body = response.json()
-    assert body["issuer"] == app.state.settings.oauth2.jwt_issuer
+    assert body["issuer"] == app.state.settings.oauth2.issuer
     assert body["authorization_endpoint"] == _issuer_endpoint(app, "/oauth2/authorize")
     assert body["token_endpoint"] == _issuer_endpoint(app, "/oauth2/token")
     assert body["userinfo_endpoint"] == _issuer_endpoint(app, "/oauth2/userinfo")
@@ -248,7 +246,7 @@ async def test_canonical_metadata_routes_follow_issuer_path_rules(
     client: httpx.AsyncClient,
 ) -> None:
     """Assert OAuth and OIDC discovery use their distinct canonical paths."""
-    issuer = app.state.settings.oauth2.jwt_issuer
+    issuer = app.state.settings.oauth2.issuer
     oauth_path = authorization_server_metadata_path(issuer)
     issuer_path = urlsplit(issuer).path.rstrip("/")
     oidc_path = f"{issuer_path}/.well-known/openid-configuration"
@@ -260,3 +258,25 @@ async def test_canonical_metadata_routes_follow_issuer_path_rules(
     assert oidc_response.status_code == status.HTTP_200_OK
     assert oauth_response.json()["issuer"] == issuer
     assert oidc_response.json()["issuer"] == issuer
+
+
+@pytest.mark.asyncio
+@app_settings(oauth2={"issuer": "https://auth.example/tenant"})
+async def test_metadata_endpoint_paths_are_independent_from_issuer_path(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+) -> None:
+    """Use the issuer origin while preserving canonical application route paths."""
+    issuer = app.state.settings.oauth2.issuer
+    oauth_response = await client.get(authorization_server_metadata_path(issuer))
+    oidc_response = await client.get("/tenant/.well-known/openid-configuration")
+
+    assert oauth_response.status_code == status.HTTP_200_OK
+    assert oidc_response.status_code == status.HTTP_200_OK
+    for response in (oauth_response, oidc_response):
+        body = response.json()
+        assert body["issuer"] == issuer
+        assert body["authorization_endpoint"] == (
+            "https://auth.example/oauth2/authorize"
+        )
+        assert body["token_endpoint"] == "https://auth.example/oauth2/token"  # noqa: S105

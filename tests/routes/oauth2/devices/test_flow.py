@@ -1,10 +1,12 @@
 """Black-box HTTP tests for OAuth2 device authorization flow behavior."""
 
+import asyncio
 import base64
 import json
 from datetime import datetime, timedelta, UTC
 from typing import cast
 from unittest.mock import Mock
+from uuid import UUID
 
 import httpx
 import pytest
@@ -30,6 +32,7 @@ from tests.fixtures.auth import (
     UserCredentials,
 )
 from tests.fixtures.settings import app_settings
+from tests.identifiers import deterministic_uuid, DEVICE_CLIENT_ID
 
 
 pytestmark = pytest.mark.api
@@ -43,6 +46,7 @@ PASSWORD_HASHER = PwdlibPasswordHasher()
 
 def decode_unverified_jwt_payload(token: str) -> dict[str, object]:
     """Decode JWT payload without verifying the signature."""
+
     _header, payload, _signature = token.split(".")
     padded_payload = payload + "=" * (-len(payload) % 4)
     return cast(
@@ -53,7 +57,7 @@ def decode_unverified_jwt_payload(token: str) -> dict[str, object]:
 async def create_device_client(
     app: FastAPI,
     *,
-    client_id: str = "device-client",
+    client_id: UUID = DEVICE_CLIENT_ID,
     scopes: list[str] | None = None,
     is_confidential: bool = False,
     is_active: bool = True,
@@ -88,7 +92,7 @@ async def login_browser_session(
 async def request_device_authorization(
     client: httpx.AsyncClient,
     *,
-    client_id: str = "device-client",
+    client_id: str = str(deterministic_uuid("device-client")),
     scope: str = "read",
     client_secret: str | None = None,
 ) -> httpx.Response:
@@ -102,11 +106,29 @@ async def request_device_authorization(
     return await client.post("/oauth2/device_authorization", data=data)
 
 
+@pytest.mark.asyncio
+@pytest.mark.negative
+async def test_device_authorization_rejects_repeated_scope(
+    client: httpx.AsyncClient,
+) -> None:
+    """Reject ambiguous device-authorization parameters before client lookup."""
+    response = await client.post(
+        "/oauth2/device_authorization",
+        content=(
+            f"client_id={deterministic_uuid('device-client')}&scope=read&scope=write"
+        ),
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.json() == {"error": "invalid_request"}
+
+
 async def poll_device_code(
     client: httpx.AsyncClient,
     *,
     device_code: str,
-    client_id: str = "device-client",
+    client_id: str = str(deterministic_uuid("device-client")),
     client_secret: str | None = None,
 ) -> httpx.Response:
     """Poll the token endpoint for a device-code grant."""
@@ -133,14 +155,47 @@ async def approve_user_code(
     assert login_response.status_code == status.HTTP_204_NO_CONTENT
     headers = {"Origin": TEST_ORIGIN}
     if include_csrf:
-        headers[app.state.settings.session.csrf.header_name] = login_response.headers[
-            app.state.settings.session.csrf.header_name
-        ]
+        headers[app.state.settings.browser_session.csrf.header_name] = (
+            login_response.headers[app.state.settings.browser_session.csrf.header_name]
+        )
     return await client.post(
         "/oauth2/device/verify",
         data={"user_code": user_code, "decision": "approve"},
         headers=headers,
     )
+
+
+@pytest.mark.asyncio
+@app_settings(
+    browser_session={"csrf": {"public_origin": "https://issuer.example"}},
+    oauth2={"issuer": "https://issuer.example/oauth2"},
+    ui={
+        "urls": {
+            "verification": "https://issuer.example/verify-email",
+            "password_reset": "https://issuer.example/reset-password",
+            "invitation": "https://issuer.example/accept-invite",
+            "device_interaction": "https://issuer.example/oauth2/device/verify",
+        }
+    },
+)
+async def test_device_verification_uri_uses_the_configured_ui_url(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+) -> None:
+    """Publish the configured Device Code interaction destination."""
+    await create_device_client(app)
+
+    response = await request_device_authorization(client)
+
+    assert response.status_code == status.HTTP_200_OK
+    assert (
+        response.json()["verification_uri"]
+        == "https://issuer.example/oauth2/device/verify"
+    )
+    verification_page = await client.get(
+        "/oauth2/device/verify", follow_redirects=False
+    )
+    assert verification_page.status_code == status.HTTP_303_SEE_OTHER
 
 
 @pytest.mark.asyncio
@@ -224,7 +279,42 @@ async def test_device_authorization_polling_too_fast_returns_slow_down(
 
 @pytest.mark.asyncio
 @pytest.mark.system
-async def test_device_authorization_approval_issues_token_pair(
+async def test_concurrent_device_polls_serialize_pending_and_slow_down(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+) -> None:
+    """Serialize simultaneous polls before reading the persisted backoff state."""
+    await create_device_client(app)
+    authorization_response = await request_device_authorization(client)
+    device_code = authorization_response.json()["device_code"]
+
+    first_response, second_response = await asyncio.gather(
+        poll_device_code(client, device_code=device_code),
+        poll_device_code(client, device_code=device_code),
+    )
+
+    errors = {first_response.json()["error"], second_response.json()["error"]}
+    assert errors == {"authorization_pending", "slow_down"}
+    assert {
+        first_response.status_code,
+        second_response.status_code,
+    } == {status.HTTP_400_BAD_REQUEST}
+    async with app.state.core_session_factory() as db_session:
+        poll_state = (
+            await db_session.execute(
+                select(
+                    OAuth2DeviceAuthorizationDB.last_polled_at,
+                    OAuth2DeviceAuthorizationDB.interval_seconds,
+                )
+            )
+        ).one()
+    assert poll_state.last_polled_at is not None
+    assert poll_state.interval_seconds == EXPECTED_SLOW_DOWN_INTERVAL_SECONDS
+
+
+@pytest.mark.asyncio
+@pytest.mark.system
+async def test_device_authorization_approval_issues_token_state(
     app: FastAPI,
     client: httpx.AsyncClient,
     verified_user_credentials: UserCredentials,
@@ -257,7 +347,7 @@ async def test_device_authorization_approval_issues_token_pair(
     assert body["access_token"]
     assert body["refresh_token"]
     claims = decode_unverified_jwt_payload(body["access_token"])
-    assert claims["client_id"] == "device-client"
+    assert claims["client_id"] == str(deterministic_uuid("device-client"))
     assert claims["scope"] == "read"
     message = logger.info.call_args.args[0]
     assert "event=oauth2_device_authorization outcome=attempted" in message
@@ -267,13 +357,13 @@ async def test_device_authorization_approval_issues_token_pair(
 
 @pytest.mark.asyncio
 @pytest.mark.negative
-async def test_device_code_exchange_does_not_mask_internal_value_error(
+async def test_device_code_exchange_hides_internal_value_error(
     app: FastAPI,
     client: httpx.AsyncClient,
     verified_user_credentials: UserCredentials,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Let unexpected issuance defects escape the OAuth2 error mapping."""
+    """Return a safe protocol error for unexpected issuance defects."""
     await create_device_client(app)
     authorization_response = await request_device_authorization(client)
     device_body = authorization_response.json()
@@ -290,13 +380,14 @@ async def test_device_code_exchange_does_not_mask_internal_value_error(
         raise ValueError(msg)
 
     monkeypatch.setattr(
-        polling_workflow.TokenIssuanceService,
-        "issue_new_session",
+        "app.oauth2.devices.polling.TokenIssuanceService.issue_new_session",
         fail_issuance,
     )
 
-    with pytest.raises(ValueError, match="unexpected issuance defect"):
-        await poll_device_code(client, device_code=device_body["device_code"])
+    response = await poll_device_code(client, device_code=device_body["device_code"])
+
+    assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    assert response.json() == {"error": "server_error"}
 
 
 @pytest.mark.asyncio
@@ -365,13 +456,13 @@ async def test_device_code_rejects_wrong_client(
 ) -> None:
     """Assert a device code is bound to the client that created it."""
     await create_device_client(app)
-    await create_device_client(app, client_id="other-device-client")
+    await create_device_client(app, client_id=deterministic_uuid("other-device-client"))
     authorization_response = await request_device_authorization(client)
 
     response = await poll_device_code(
         client,
         device_code=authorization_response.json()["device_code"],
-        client_id="other-device-client",
+        client_id=deterministic_uuid("other-device-client"),
     )
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
@@ -391,6 +482,32 @@ async def test_device_authorization_rejects_invalid_scope(
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
     assert response.json()["error"] == "invalid_scope"
+
+
+@pytest.mark.asyncio
+@pytest.mark.negative
+async def test_device_authorization_hides_internal_value_error(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Return a safe protocol error for unexpected creation defects."""
+    await create_device_client(app)
+
+    async def fail_creation(*_args: object, **_kwargs: object) -> None:
+        msg = "unexpected device authorization defect"
+        raise ValueError(msg)
+
+    monkeypatch.setattr(
+        "app.oauth2.devices.authorization.DeviceAuthorizationService."
+        "create_device_authorization",
+        fail_creation,
+    )
+
+    response = await request_device_authorization(client)
+
+    assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    assert response.json() == {"error": "server_error"}
 
 
 @pytest.mark.asyncio
@@ -466,7 +583,7 @@ async def test_device_authorization_rejects_client_without_device_grant(
     async with app.state.core_session_factory() as db_session:
         db_session.add(
             OAuth2ClientDB(
-                client_id="browser-only-client",
+                client_id=deterministic_uuid("browser-only-client"),
                 client_secret=None,
                 name="Browser Only Client",
                 grant_types=["authorization_code"],
@@ -480,7 +597,7 @@ async def test_device_authorization_rejects_client_without_device_grant(
 
     response = await request_device_authorization(
         client,
-        client_id="browser-only-client",
+        client_id=deterministic_uuid("browser-only-client"),
     )
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
@@ -553,7 +670,7 @@ async def test_device_authorization_retries_user_code_collision(
     client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Assert device authorization retries when generated user codes collide."""
+    """Retry the unique-index failure raised while inserting a user code."""
     await create_device_client(app)
     token_hash_secret = app.state.settings.oauth2.token_hash_secret.get_secret_value()
     async with app.state.core_session_factory() as db_session:
@@ -567,7 +684,7 @@ async def test_device_authorization_retries_user_code_collision(
                     token="COLL-IDE1",  # noqa: S106
                     secret=token_hash_secret,
                 ),
-                client_id="device-client",
+                client_id=deterministic_uuid("device-client"),
                 scope="read",
                 expires_at=datetime.now(UTC) + timedelta(minutes=5),
                 interval_seconds=5,
@@ -653,7 +770,7 @@ async def test_device_code_rejects_inactive_client_after_approval(
     async with app.state.core_session_factory() as db_session:
         await db_session.execute(
             update(OAuth2ClientDB)
-            .where(OAuth2ClientDB.client_id == "device-client")
+            .where(OAuth2ClientDB.client_id == deterministic_uuid("device-client"))
             .values(is_active=False)
         )
         await db_session.commit()
@@ -680,7 +797,7 @@ async def test_device_code_rejects_inactive_client_before_approval(
     async with app.state.core_session_factory() as db_session:
         await db_session.execute(
             update(OAuth2ClientDB)
-            .where(OAuth2ClientDB.client_id == "device-client")
+            .where(OAuth2ClientDB.client_id == deterministic_uuid("device-client"))
             .values(is_active=False)
         )
         await db_session.commit()

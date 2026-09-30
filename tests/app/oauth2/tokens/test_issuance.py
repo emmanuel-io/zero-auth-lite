@@ -5,9 +5,9 @@ from datetime import datetime, timedelta, UTC
 import pytest
 from app.db.models.oauth2_client import OAuth2ClientDB
 from app.db.models.oauth2_session import OAuth2SessionDB
-from app.db.models.oauth2_token_pair import OAuth2TokenPairDB
-from app.oauth2.oidc.keys import get_signing_key
-from app.oauth2.settings import OAuth2GrantType
+from app.db.models.oauth2_token_state import OAuth2TokenStateDB
+from app.oauth2.grants.types import OAuth2GrantType, OAuth2SessionGrantType
+from app.oauth2.signing.keys import get_signing_key
 from app.oauth2.tokens.access import create_client_access_token_payload
 from app.oauth2.tokens.dtos import NewTokenSessionDTO
 from app.oauth2.tokens.hash import hash_oauth2_token
@@ -16,8 +16,11 @@ from fastapi import FastAPI
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.identifiers import deterministic_uuid
+
 
 pytestmark = pytest.mark.integration
+ROTATED_ACCESS_LIFETIME_SECONDS = 299
 
 
 @pytest.mark.asyncio
@@ -25,18 +28,19 @@ async def test_issuance_persists_one_hashed_machine_token_session(
     app: FastAPI, db_session: AsyncSession
 ) -> None:
     """Persist new-session authority without storing bearer material."""
+
     settings = app.state.settings.oauth2
     service = TokenIssuanceService(
         db_session=db_session,
         settings=settings,
-        signing_key=get_signing_key(settings.prv_key_b64),
+        signing_key=get_signing_key(settings.signing_private_key_b64),
     )
     db_session.add(
         OAuth2ClientDB(
-            client_id="machine-client",
+            client_id=deterministic_uuid("machine-client"),
             client_secret="hashed-secret",  # noqa: S106
             name="Machine Client",
-            grant_types=[OAuth2GrantType.client_credentials],
+            grant_types=[OAuth2GrantType.CLIENT_CREDENTIALS],
             scopes=["read"],
             redirect_uris=[],
             is_confidential=True,
@@ -49,12 +53,12 @@ async def test_issuance_persists_one_hashed_machine_token_session(
     issued = await service.issue_new_session(
         NewTokenSessionDTO(
             access_payload=create_client_access_token_payload(
-                client_id="machine-client",
-                audience=settings.jwt_audience,
+                client_id=deterministic_uuid("machine-client"),
+                audience=settings.access_token_audience,
                 scope="read",
             ),
-            grant_type=OAuth2GrantType.client_credentials,
-            client_id="machine-client",
+            grant_type=OAuth2SessionGrantType.CLIENT_CREDENTIALS,
+            client_id=deterministic_uuid("machine-client"),
             scope="read",
             user_id=None,
             organization_id=None,
@@ -63,27 +67,27 @@ async def test_issuance_persists_one_hashed_machine_token_session(
     )
 
     session = await db_session.get(OAuth2SessionDB, issued.session_id)
-    stored_pair = await db_session.scalar(
-        select(OAuth2TokenPairDB).where(
-            OAuth2TokenPairDB.session_id == issued.session_id
+    stored_state = await db_session.scalar(
+        select(OAuth2TokenStateDB).where(
+            OAuth2TokenStateDB.session_id == issued.session_id
         )
     )
-    response = service.build_response(issued.token_pair)
+    response = service.build_response(issued.tokens)
     secret = settings.token_hash_secret.get_secret_value()
 
     assert session is not None
     assert session.user_id is None
-    assert session.client_id == "machine-client"
-    assert session.grant_type == OAuth2GrantType.client_credentials
+    assert session.client_id == deterministic_uuid("machine-client")
+    assert session.grant_type == OAuth2SessionGrantType.CLIENT_CREDENTIALS
     assert session.scope == "read"
     assert session.organization_id is None
-    assert stored_pair is not None
-    assert stored_pair.access_token_hash == hash_oauth2_token(
-        token=issued.token_pair.access_token,
+    assert stored_state is not None
+    assert stored_state.access_token_hash == hash_oauth2_token(
+        token=issued.tokens.access_token,
         secret=secret,
     )
-    assert stored_pair.refresh_token_hash is None
-    assert response.access_token == issued.token_pair.access_token
+    assert stored_state.refresh_token_hash is None
+    assert response.access_token == issued.tokens.access_token
     assert response.refresh_token is None
 
 
@@ -96,17 +100,20 @@ async def test_rotation_creation_preserves_the_existing_family_deadline(
     service = TokenIssuanceService(
         db_session=db_session,
         settings=settings,
-        signing_key=get_signing_key(settings.prv_key_b64),
+        signing_key=get_signing_key(settings.signing_private_key_b64),
     )
     deadline = datetime.now(UTC) + timedelta(minutes=5)
 
-    token_pair = service.create_rotation_tokens(
+    tokens = service.create_rotation_tokens(
         access_payload=create_client_access_token_payload(
-            client_id="machine-client",
-            audience=settings.jwt_audience,
+            client_id=deterministic_uuid("machine-client"),
+            audience=settings.access_token_audience,
         ),
         refresh_deadline=deadline,
     )
 
-    assert token_pair.refresh_token is not None
-    assert token_pair.refresh_expires_at == deadline
+    assert tokens.refresh_token is not None
+    assert tokens.refresh_expires_at == deadline
+    assert tokens.access_expires_at == deadline
+    assert tokens.access_token_lifetime_seconds == ROTATED_ACCESS_LIFETIME_SECONDS
+    assert service.build_response(tokens).expires_in == ROTATED_ACCESS_LIFETIME_SECONDS

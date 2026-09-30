@@ -17,30 +17,37 @@ from app.browser_sessions.csrf import (
 from app.browser_sessions.dependencies import (
     get_resolved_browser_session,
     PublicOptionalBrowserUserContextDep,
-    SessionAuthenticationServiceDep,
-    SessionLifecycleServiceDep,
-    SessionRevocationServiceDep,
 )
-from app.browser_sessions.enums import CSRFTokenExposure, LogoutScope
+from app.browser_sessions.enums import (
+    BrowserSessionRevocationReason,
+    CSRFTokenExposure,
+    LogoutScope,
+)
 from app.browser_sessions.errors import (
-    CSRFCookieHeaderMismatchError,
-    CSRFHeaderSessionMismatchError,
-    CSRFMissingCookieError,
-    CSRFMissingHeaderError,
+    BrowserSessionInvalidError,
+    CSRF_ERRORS,
     InvalidLoginCredentialsError,
-    SessionInvalidError,
 )
 from app.browser_sessions.response_transport import (
     request_pre_session_csrf_cookie,
     request_session_cookie_clear_always,
     request_session_cookie_clear_on_success,
 )
-from app.browser_sessions.specs import SessionSpecs
+from app.browser_sessions.service_dependencies import (
+    BrowserSessionAuthenticationServiceDep,
+    BrowserSessionLifecycleServiceDep,
+    BrowserSessionRevocationServiceDep,
+)
+from app.browser_sessions.specs import BrowserSessionSpecs
 from app.browser_sessions.transport import apply_login_transport
 from app.core.request_ip import get_source_ip
-from app.identity.public_ids import format_user_id
+from app.http_paths import (
+    BROWSER_SESSION_CSRF_PATH,
+    BROWSER_SESSION_LOGIN_PATH,
+    BROWSER_SESSION_LOGOUT_PATH,
+)
 from app.openapi_tags import SESSION_TAG
-from app.settings.dependencies import CSRFSettingsDep, SessionSettingsDep
+from app.settings.dependencies import BrowserSessionSettingsDep, CSRFSettingsDep
 
 
 router = APIRouter(tags=[SESSION_TAG])
@@ -48,14 +55,11 @@ logger = getLogger(__name__)
 
 
 @router.post(
-    "/login",
+    BROWSER_SESSION_LOGIN_PATH,
     status_code=status.HTTP_204_NO_CONTENT,
     responses=app_error_responses(
         InvalidLoginCredentialsError,
-        CSRFMissingCookieError,
-        CSRFMissingHeaderError,
-        CSRFCookieHeaderMismatchError,
-        CSRFHeaderSessionMismatchError,
+        *CSRF_ERRORS,
         descriptions={
             401: "Invalid email or password.",
             403: "Missing or invalid pre-session CSRF proof.",
@@ -71,9 +75,9 @@ async def login(  # noqa: PLR0913
     response: Response,
     request: Request,
     payload: LoginRequest,
-    authentication_service: SessionAuthenticationServiceDep,
+    authentication_service: BrowserSessionAuthenticationServiceDep,
     csrf_settings: CSRFSettingsDep,
-    session_settings: SessionSettingsDep,
+    session_settings: BrowserSessionSettingsDep,
     _origin: Annotated[
         str | None,
         Header(
@@ -98,7 +102,7 @@ async def login(  # noqa: PLR0913
     """Authenticate a user and update browser-session transport state."""
     validate_double_submit_csrf(request=request, csrf_settings=csrf_settings)
     data = await authentication_service.login(
-        email=payload.username,
+        email=payload.email,
         password=payload.password,
         source_ip=get_source_ip(request),
         user_agent=request.headers.get("user-agent"),
@@ -114,14 +118,11 @@ async def login(  # noqa: PLR0913
 
 
 @router.post(
-    "/logout",
+    BROWSER_SESSION_LOGOUT_PATH,
     status_code=status.HTTP_204_NO_CONTENT,
     responses=app_error_responses(
-        SessionInvalidError,
-        CSRFMissingCookieError,
-        CSRFMissingHeaderError,
-        CSRFCookieHeaderMismatchError,
-        CSRFHeaderSessionMismatchError,
+        BrowserSessionInvalidError,
+        *CSRF_ERRORS,
         descriptions={
             401: "The required browser session is missing or invalid.",
             403: "Missing or invalid CSRF proof for a live browser session.",
@@ -136,12 +137,12 @@ async def login(  # noqa: PLR0913
 )
 async def logout(  # noqa: PLR0913
     *,
-    lifecycle_service: SessionLifecycleServiceDep,
-    revocation_service: SessionRevocationServiceDep,
+    lifecycle_service: BrowserSessionLifecycleServiceDep,
+    revocation_service: BrowserSessionRevocationServiceDep,
     request: Request,
     response: Response,
     csrf_settings: CSRFSettingsDep,
-    session_settings: SessionSettingsDep,
+    session_settings: BrowserSessionSettingsDep,
     payload: Annotated[LogoutRequest, Body(default_factory=LogoutRequest)],
 ) -> Response:
     """Revoke the current, other, or all browser sessions for the user."""
@@ -149,7 +150,7 @@ async def logout(  # noqa: PLR0913
     session_id = get_session_cookie(request, session_settings)
     if session_id is None:
         if scope != LogoutScope.CURRENT:
-            raise SessionInvalidError
+            raise BrowserSessionInvalidError
         request_session_cookie_clear_always(request)
         response.status_code = status.HTTP_204_NO_CONTENT
         return response
@@ -170,11 +171,15 @@ async def logout(  # noqa: PLR0913
         revoked_count = int(await revocation_service.logout(session_id=session_id))
     else:
         if session is None:
-            raise SessionInvalidError
+            raise BrowserSessionInvalidError
         revoked_count = await revocation_service.revoke_user_sessions(
             user_id=session.user_id,
             excluded_session_id=(session_id if scope == LogoutScope.OTHERS else None),
-            reason=("logout_others" if scope == LogoutScope.OTHERS else "logout_all"),
+            reason=(
+                BrowserSessionRevocationReason.LOGOUT_OTHERS
+                if scope == LogoutScope.OTHERS
+                else BrowserSessionRevocationReason.LOGOUT_ALL
+            ),
         )
     if session is not None:
         user = await lifecycle_service.get_user_by_id(user_id=session.user_id)
@@ -183,7 +188,7 @@ async def logout(  # noqa: PLR0913
                 "event=browser_session_revocation outcome=attempted subject_id=%s "
                 "reason=%s revoked_sessions=%s"
             ),
-            format_user_id(user.public_id) if user is not None else "unknown",
+            str(user.public_id) if user is not None else "unknown",
             scope.value,
             revoked_count,
         )
@@ -198,7 +203,7 @@ async def logout(  # noqa: PLR0913
 
 
 @router.get(
-    "/csrf",
+    BROWSER_SESSION_CSRF_PATH,
     status_code=status.HTTP_204_NO_CONTENT,
     responses={
         204: {
@@ -226,7 +231,7 @@ async def get_csrf_token(
             expose_csrf_header(response, session_data.csrf, csrf_settings)
         return response
 
-    csrf_token = secrets.token_urlsafe(SessionSpecs.TOKEN_BYTES)
+    csrf_token = secrets.token_urlsafe(BrowserSessionSpecs.TOKEN_BYTES)
     request_pre_session_csrf_cookie(request, csrf_token=csrf_token)
     if csrf_settings.expose_token == CSRFTokenExposure.HEADER:
         expose_csrf_header(response, csrf_token, csrf_settings)

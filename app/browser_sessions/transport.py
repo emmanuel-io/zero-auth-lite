@@ -11,7 +11,7 @@ from app.browser_sessions.cookies import (
 from app.browser_sessions.csrf import expose_csrf_header
 from app.browser_sessions.dtos import LoginResultDTO
 from app.browser_sessions.enums import CSRFTokenExposure
-from app.browser_sessions.settings import CSRFSettings, SessionSettings
+from app.browser_sessions.settings import BrowserSessionSettings, CSRFSettings
 
 
 def apply_login_transport(
@@ -19,16 +19,16 @@ def apply_login_transport(
     data: LoginResultDTO,
     *,
     csrf_settings: CSRFSettings,
-    session_settings: SessionSettings,
+    session_settings: BrowserSessionSettings,
 ) -> None:
     """Attach a new session and its matching CSRF state to a response."""
-    set_session_cookie(response, data.session, session_settings)
+    set_session_cookie(response, data.raw_session_id, session_settings)
     if csrf_settings.expose_token == CSRFTokenExposure.HEADER:
-        expose_csrf_header(response, data.csrf, csrf_settings)
+        expose_csrf_header(response, data.csrf_token, csrf_settings)
     if session_csrf_uses_cookie(csrf_settings):
         set_csrf_cookie(
             response,
-            data.csrf,
+            data.csrf_token,
             csrf_settings,
             max_age_seconds=session_settings.ttl_seconds,
         )

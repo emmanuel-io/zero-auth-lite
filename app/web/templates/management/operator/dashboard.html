@@ -1,0 +1,49 @@
+{% extends "management/base.html" %}
+{% block title %}Operator · Zero Auth Lite{% endblock %}
+{% block content %}
+  <header class="page-header">
+    <p class="eyebrow">Server operator</p>
+    <h1>Control plane</h1>
+    <p class="muted">Manage identities and protocol clients across this Zero Auth Lite server.</p>
+  </header>
+  <div class="dashboard-grid">
+    <section class="feature-card">
+      <div>
+        <p class="feature-card__label">Directory</p>
+        <h2>Organizations</h2>
+        <p>Create organizations and revoke their security sessions.</p>
+      </div>
+      <a class="card-link" href="/management/operator/organizations">Manage organizations <span aria-hidden="true">→</span>
+      </a>
+    </section>
+    <section class="feature-card">
+      <div>
+        <p class="feature-card__label">Identities</p>
+        <h2>Users</h2>
+        <p>Invite and manage users across organizations.</p>
+      </div>
+      <a class="card-link" href="/management/operator/users">Manage users <span aria-hidden="true">→</span>
+      </a>
+    </section>
+    {% if oauth2_enabled %}
+      <section class="feature-card">
+        <div>
+          <p class="feature-card__label">Protocol</p>
+          <h2>OAuth2 clients</h2>
+          <p>Register clients, credentials, scopes, grants, and organization policies.</p>
+        </div>
+        <a class="card-link" href="/management/operator/oauth2/clients">Manage clients <span aria-hidden="true">→</span>
+        </a>
+      </section>
+    {% endif %}
+    <section class="feature-card">
+      <div>
+        <p class="feature-card__label">Maintenance</p>
+        <h2>Browser sessions</h2>
+        <p>Clean expired or revoked sessions, or revoke every browser session.</p>
+      </div>
+      <a class="card-link" href="/management/operator/sessions">Session maintenance <span aria-hidden="true">→</span>
+      </a>
+    </section>
+  </div>
+{% endblock %}

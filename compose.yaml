@@ -15,7 +15,7 @@ services:
       dockerfile: docker/Dockerfile
     environment:
       ZA_DB_PATH: /data/zero-auth-lite.db
-      ZA_SNOWFLAKE_NODE_ID: "0"
+      ZA_RUNTIME_DIR: /run/zero-auth-lite
       ZA_MAIL__SMTP_HOST: mailpit
       ZA_MAIL__SMTP_PORT: "1025"
       # Trust only the Caddy container pinned on the local Compose network.
@@ -25,6 +25,7 @@ services:
     volumes:
       - ${ZA_CONFIG_FILE:-./config/full-server.example.toml}:/workspace/zero-auth-lite.toml:ro
       - zero_auth_data:/data
+      - zero_auth_runtime:/run/zero-auth-lite
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -33,15 +34,16 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
-    command: ["python", "-m", "app.events.worker"]
+    command: ["python", "-m", "app.notifications.worker"]
     environment:
       ZA_DB_PATH: /data/zero-auth-lite.db
-      ZA_SNOWFLAKE_NODE_ID: "1"
+      ZA_RUNTIME_DIR: /run/zero-auth-lite
       ZA_MAIL__SMTP_HOST: mailpit
       ZA_MAIL__SMTP_PORT: "1025"
     volumes:
       - ${ZA_CONFIG_FILE:-./config/full-server.example.toml}:/workspace/zero-auth-lite.toml:ro
       - zero_auth_data:/data
+      - zero_auth_runtime:/run/zero-auth-lite
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -53,6 +55,20 @@ services:
       context: .
       dockerfile: docker/Dockerfile
     command: ["python", "-m", "app.oauth2.cleanup_worker"]
+    environment:
+      ZA_DB_PATH: /data/zero-auth-lite.db
+    volumes:
+      - ${ZA_CONFIG_FILE:-./config/full-server.example.toml}:/workspace/zero-auth-lite.toml:ro
+      - zero_auth_data:/data
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  browser-session-cleanup:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: ["python", "-m", "app.browser_sessions.cleanup_worker"]
     environment:
       ZA_DB_PATH: /data/zero-auth-lite.db
     volumes:
@@ -80,13 +96,13 @@ services:
   mailpit:
     image: axllent/mailpit
     ports:
-      - "8025:8025"
-      - "1025:1025"
+      - "127.0.0.1:8025:8025"
 
 volumes:
   caddy_config:
   caddy_data:
   zero_auth_data:
+  zero_auth_runtime:
 
 networks:
   default:

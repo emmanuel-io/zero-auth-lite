@@ -5,7 +5,7 @@ from typing import cast
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from app.identity.users.enums import OrganizationUserRole
+from app.identity.users.enums import OrganizationMembershipRole
 from app.identity.users.types import UserEmail, UserFirstName, UserLastName
 from app.password.validation import StrongPassword
 
@@ -29,7 +29,7 @@ class UserCreateCommand(BaseModel):
     first_name: UserFirstName = ""
     last_name: UserLastName = ""
     is_active: bool = True
-    role: OrganizationUserRole = OrganizationUserRole.MEMBER
+    role: OrganizationMembershipRole = OrganizationMembershipRole.MEMBER
     is_operator: bool = False
     email_verified: bool = False
 
@@ -53,7 +53,7 @@ class UserUpdateCommand(BaseModel):
     first_name: UserFirstName | None = None
     last_name: UserLastName | None = None
     is_active: bool | None = None
-    role: OrganizationUserRole | None = None
+    role: OrganizationMembershipRole | None = None
     is_operator: bool | None = None
     email_verified: bool | None = None
     organization_id: int | None = None

@@ -1,0 +1,22 @@
+{% extends "management/base.html" %}
+{% block title %}Organization details · Zero Auth Lite{% endblock %}
+{% block content %}
+  <header class="page-header">
+    <p class="eyebrow">Organization administration</p>
+    <h1>Organization details</h1>
+    <p class="muted">Update the name used to identify your organization.</p>
+  </header>
+  <section class="panel form-panel">
+    <form class="form-stack" method="post" action="/management/organization" hx-post="/management/organization">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="field">
+        <label for="organization-name">Name</label>
+        <input id="organization-name" name="name" value="{{ organization.name }}" maxlength="{{ form_constraints.organization_name_max }}" required>
+      </div>
+      <div class="form-actions">
+        <a class="button button--secondary" href="/management/organization">Cancel</a>
+        <button class="button button--primary" type="submit">Save organization</button>
+      </div>
+    </form>
+  </section>
+{% endblock %}

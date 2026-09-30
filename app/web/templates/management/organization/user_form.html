@@ -1,0 +1,68 @@
+{% extends "management/base.html" %}
+{% block title %}{{ heading }} · Zero Auth Lite{% endblock %}
+{% block content %}
+  <header class="page-header"><p class="eyebrow">Organization users</p><h1>{{ heading }}</h1></header>
+  <section class="panel form-panel form-panel--full">
+    <form class="form-stack" method="post" action="{{ action }}" hx-post="{{ action }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="field">
+        <label for="email">Email</label>
+        <input id="email" name="email" type="email" maxlength="{{ form_constraints.email_max }}" value="{{ user.email if user else '' }}" required>
+      </div>
+      <div class="form-field-grid">
+        <div class="field">
+          <label for="first-name">First name</label>
+          <input id="first-name" name="first_name" maxlength="{{ form_constraints.first_name_max }}" value="{{ user.first_name if user else '' }}">
+        </div>
+        <div class="field">
+          <label for="last-name">Last name</label>
+          <input id="last-name" name="last_name" maxlength="{{ form_constraints.last_name_max }}" value="{{ user.last_name if user else '' }}">
+        </div>
+      </div>
+      {% if user %}
+        <div class="field">
+          <label for="role">Role</label>
+          <select id="role" name="role">
+            <option value="member" {% if user.role == 'member' %}selected{% endif %}>Member</option>
+            <option value="admin" {% if user.role == 'admin' %}selected{% endif %}>Admin</option>
+          </select>
+        </div>
+      {% else %}
+        <div class="form-field-grid">
+          <div class="field">
+            <label for="role">Role</label>
+            <select id="role" name="role">
+              <option value="member">Member</option>
+              <option value="admin">Admin</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="password">Initial password</label>
+            <input id="password" name="password" type="password" autocomplete="new-password" maxlength="{{ form_constraints.password_max }}">
+            <p class="field-hint">Leave blank to send an invitation.</p>
+          </div>
+        </div>
+      {% endif %}
+      <label class="checkbox">
+        <input name="is_active" type="checkbox" value="true" {% if not user or user.is_active %}checked{% endif %}> Active</label>
+      <div class="form-actions"><button class="button button--primary" type="submit">{{ submit_label }}</button></div>
+    </form>
+  </section>
+  {% if user %}
+    <div class="inline-actions user-management-actions">
+      {% if user.is_active and not user.email_verified %}
+        <form method="post" action="{{ action }}/invitation">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button class="button button--secondary button--compact" type="submit">Resend invitation</button>
+        </form>
+      {% endif %}
+      <a class="button button--danger button--compact" href="{{ action }}/delete">Delete user</a>
+      {% if user.session_management_allowed %}
+        <a class="button button--danger button--compact" href="{{ action }}/sessions/browser/delete">Delete browser sessions</a>
+        <a class="button button--danger button--compact" href="{{ action }}/sessions/oauth2/delete">Delete OAuth2 sessions</a>
+        <a class="button button--danger button--compact" href="{{ action }}/sessions/revoke">Revoke all sessions</a>
+      {% endif %}
+    </div>
+  {% endif %}
+  <a class="text-link" href="/management/organization/users">Back to users</a>
+{% endblock %}

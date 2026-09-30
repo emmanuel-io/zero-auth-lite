@@ -5,11 +5,13 @@ from typing import Annotated, Final
 
 from pydantic import AfterValidator, StringConstraints
 
-from app.password.errors import PasswordPolicyViolationError
-
 
 MIN_PASSWORD_LENGTH: Final[int] = 8
 MAX_PASSWORD_LENGTH: Final[int] = 1_024
+
+
+class PasswordPolicyViolationError(ValueError):
+    """Raised when a credential does not satisfy the shared password policy."""
 
 
 def _password_policy_error(password: str) -> str | None:

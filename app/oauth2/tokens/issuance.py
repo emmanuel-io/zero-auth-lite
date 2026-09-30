@@ -7,17 +7,16 @@ from sqlalchemy import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.oauth2_session import OAuth2SessionDB
-from app.db.models.oauth2_token_pair import OAuth2TokenPairDB
-from app.oauth2.schemas import TokenPair
+from app.db.models.oauth2_token_state import OAuth2TokenStateDB
+from app.oauth2.schemas import OAuth2TokenResponse
 from app.oauth2.settings import OAuth2Settings
 from app.oauth2.tokens.access import (
     AccessTokenPayload,
-    create_token_pair_data,
-    TokenPairData,
+    create_issued_tokens,
+    IssuedTokens,
 )
 from app.oauth2.tokens.dtos import IssuedTokenSessionDTO, NewTokenSessionDTO
 from app.oauth2.tokens.hash import hash_oauth2_token
-from app.public_ids import PublicId
 
 
 class TokenIssuanceService:
@@ -40,7 +39,7 @@ class TokenIssuanceService:
         *,
         access_payload: AccessTokenPayload,
         refresh_deadline: datetime,
-    ) -> TokenPairData:
+    ) -> IssuedTokens:
         """Create replacement tokens without changing persisted family state."""
         return self._create_tokens(
             access_payload=access_payload,
@@ -54,17 +53,17 @@ class TokenIssuanceService:
         access_payload: AccessTokenPayload,
         include_refresh_token: bool,
         refresh_deadline: datetime | None = None,
-    ) -> TokenPairData:
+    ) -> IssuedTokens:
         """Create token material using the canonical OAuth2 settings."""
-        return create_token_pair_data(
+        return create_issued_tokens(
             access_payload=access_payload,
             access_token_lifetime_seconds=self.settings.access_token_lifetime_seconds,
             refresh_token_lifetime_seconds=(
                 self.settings.refresh_token_lifetime_seconds
             ),
-            jwt_issuer=self.settings.jwt_issuer,
+            issuer=self.settings.issuer,
             key=self.signing_key,
-            key_id=self.settings.jwt_key_id,
+            key_id=self.settings.signing_key_id,
             include_refresh_token=include_refresh_token,
             refresh_deadline=refresh_deadline,
         )
@@ -73,7 +72,7 @@ class TokenIssuanceService:
         self, data: NewTokenSessionDTO
     ) -> IssuedTokenSessionDTO:
         """Create tokens and persist their new authorization session atomically."""
-        token_pair = self._create_tokens(
+        tokens = self._create_tokens(
             access_payload=data.access_payload,
             include_refresh_token=data.include_refresh_token,
         )
@@ -92,36 +91,36 @@ class TokenIssuanceService:
         ).scalar_one()
         secret = self.settings.token_hash_secret.get_secret_value()
         self.db_session.add(
-            OAuth2TokenPairDB(
+            OAuth2TokenStateDB(
                 access_token_hash=hash_oauth2_token(
-                    token=token_pair.access_token, secret=secret
+                    token=tokens.access_token, secret=secret
                 ),
                 refresh_token_hash=(
-                    hash_oauth2_token(token=token_pair.refresh_token, secret=secret)
-                    if token_pair.refresh_token is not None
+                    hash_oauth2_token(token=tokens.refresh_token, secret=secret)
+                    if tokens.refresh_token is not None
                     else None
                 ),
-                access_expires_at=token_pair.access_expires_at,
-                refresh_expires_at=token_pair.refresh_expires_at,
-                access_jti=token_pair.access_jti,
+                access_expires_at=tokens.access_expires_at,
+                refresh_expires_at=tokens.refresh_expires_at,
+                access_jti=tokens.access_jti,
                 session_id=oauth2_session.id,
             )
         )
         await self.db_session.flush()
         return IssuedTokenSessionDTO(
-            token_pair=token_pair,
+            tokens=tokens,
             session_id=oauth2_session.id,
-            session_public_id=PublicId(oauth2_session.public_id),
+            session_public_id=oauth2_session.public_id,
         )
 
     def build_response(
-        self, token_pair: TokenPairData, *, id_token: str | None = None
-    ) -> TokenPair:
+        self, tokens: IssuedTokens, *, id_token: str | None = None
+    ) -> OAuth2TokenResponse:
         """Build the standardized token response from issued token material."""
-        return TokenPair(
-            access_token=token_pair.access_token,
-            refresh_token=token_pair.refresh_token,
+        return OAuth2TokenResponse(
+            access_token=tokens.access_token,
+            refresh_token=tokens.refresh_token,
             id_token=id_token,
-            expires_in=self.settings.access_token_lifetime_seconds,
+            expires_in=tokens.access_token_lifetime_seconds,
             token_type="bearer",  # noqa: S106
         )

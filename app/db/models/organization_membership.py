@@ -6,7 +6,7 @@ from sqlalchemy import CheckConstraint, Enum, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
-from app.identity.users.enums import OrganizationUserRole
+from app.identity.users.enums import OrganizationMembershipRole
 
 
 if TYPE_CHECKING:
@@ -31,17 +31,17 @@ class OrganizationMembershipDB(Base):
         index=True,
         nullable=False,
     )
-    role: Mapped[OrganizationUserRole] = mapped_column(
+    role: Mapped[OrganizationMembershipRole] = mapped_column(
         Enum(
-            OrganizationUserRole,
-            name="organization_user_role",
+            OrganizationMembershipRole,
+            name="organization_membership_role",
             native_enum=False,
             create_constraint=False,
             validate_strings=True,
             values_callable=lambda members: [member.value for member in members],
         ),
         nullable=False,
-        default=OrganizationUserRole.MEMBER,
+        default=OrganizationMembershipRole.MEMBER,
     )
 
     user: Mapped["UserDB"] = relationship(

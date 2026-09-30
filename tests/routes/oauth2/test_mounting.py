@@ -42,7 +42,7 @@ async def test_oauth2_routes_are_hidden_when_disabled(
     metadata_response = await client.get("/.well-known/oauth-authorization-server")
     jwks_response = await client.get("/oauth2/jwks.json")
     token_response = await client.post("/oauth2/token")
-    health_response = await client.get("/health")
+    health_response = await client.get("/health/live")
 
     assert metadata_response.status_code == status.HTTP_404_NOT_FOUND
     assert jwks_response.status_code == status.HTTP_404_NOT_FOUND

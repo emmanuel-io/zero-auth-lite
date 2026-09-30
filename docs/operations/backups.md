@@ -1,7 +1,7 @@
 # Backups And Recovery
 
 The SQLite database contains the durable identity, browser-session, OAuth2
-session, token-pair, refresh-token history, workflow-token, and notification
+session, token-state, refresh-token history, workflow-token, and notification
 outbox state. Back it up as one relational unit so that related lifecycle and
 revocation records are restored together.
 
@@ -21,8 +21,9 @@ orchestration. While the server is running, use SQLite's online backup API or
 the `sqlite3` CLI `.backup` command against the configured database. These
 mechanisms take a consistent snapshot while WAL mode is active.
 
-Alternatively, stop the web process and both workers completely before copying
-the database files. Never copy only the main `.db` file from a running server:
+Alternatively, stop the web process, the outbox worker, and both cleanup workers
+completely before copying the database files. Never copy only the main `.db`
+file from a running server:
 committed changes may still be present in the `-wal` file, so such a copy can be
 incomplete. Keep the backup destination outside the live database directory,
 then validate integrity and perform a restore rehearsal on an isolated copy.

@@ -10,8 +10,8 @@ use. The `config/` catalog contains three supported profiles:
   default;
 - `development.example.toml` adapts that complete server to direct local HTTP;
 - `client-credentials.example.toml` enables only the Client Credentials OAuth2
-  grant and disables browser sessions. The canonical identity workflow APIs
-  remain mounted under `/api/v1/auth` when authentication uses an external UI.
+  grant and disables browser sessions, identity-workflow presentation, the
+  browser-facing JSON transport, and mail delivery.
 
 The full-server and development profiles list every setting. Commented values
 show the application defaults; active values define the topology or mark
@@ -35,7 +35,7 @@ table:
 ```bash
 cp config/full-server.example.toml zero-auth-lite.toml
 # Edit zero-auth-lite.toml and set operator_email and operator_password.
-ZA_CONFIG_FILE=zero-auth-lite.toml docker compose up --build
+ZA_CONFIG_FILE=./zero-auth-lite.toml docker compose up --build
 ```
 
 Host-shell overrides are not automatically passed into the Compose backend.

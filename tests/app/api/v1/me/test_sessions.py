@@ -5,57 +5,14 @@ from unittest.mock import AsyncMock
 
 import pytest
 from app.api.v1.me.errors import CurrentSessionRequiresLogoutError
-from app.api.v1.me.schemas import CurrentUserPasswordChangeRequest
-from app.api.v1.me.sessions import change_password, delete_me, revoke_session
-from app.browser_sessions.public_ids import format_browser_session_id
-from app.browser_sessions.response_transport import (
-    SessionCookieMutation,
-    SessionCookieMutationKind,
-)
-from app.public_ids import PublicId
-from app.security.dtos import BrowserUserPrincipalContext
+from app.api.v1.me.sessions import revoke_session
+from app.security.principals import BrowserUserPrincipalContext
 from fastapi import status
-from fastapi.responses import Response
-from starlette.requests import Request
 
-from tests.fixtures.api import TEST_PASSWORD
-from tests.mocks.api import FakeUserSelfService
+from tests.identifiers import PublicId
 
 
 pytestmark = pytest.mark.unit
-NEW_PASSWORD = "N3wSecretPass2!"  # noqa: S105
-
-
-@pytest.mark.asyncio
-async def test_session_account_routes_call_user_service() -> None:
-    """Assert session-bound account handlers invoke user commands."""
-    service = FakeUserSelfService()
-    password_request = Request({"type": "http"})
-    delete_request = Request({"type": "http"})
-
-    password_response = await change_password(
-        request=password_request,
-        response=Response(),
-        payload=CurrentUserPasswordChangeRequest(
-            current_password=TEST_PASSWORD,
-            new_password=NEW_PASSWORD,
-        ),
-        user_service=service,  # type: ignore[arg-type]
-    )
-    delete_response = await delete_me(
-        request=delete_request,
-        response=Response(),
-        user_service=service,  # type: ignore[arg-type]
-    )
-
-    assert password_response.status_code == status.HTTP_204_NO_CONTENT
-    assert service.password_changed
-    assert delete_response.status_code == status.HTTP_204_NO_CONTENT
-    assert service.deleted
-    for request in (password_request, delete_request):
-        mutation = request.state.session_cookie_mutation
-        assert isinstance(mutation, SessionCookieMutation)
-        assert mutation.kind == SessionCookieMutationKind.CLEAR_ON_SUCCESS
 
 
 @pytest.mark.asyncio
@@ -69,14 +26,18 @@ async def test_revoke_session_rejects_current_session() -> None:
     )
     revocation_service = SimpleNamespace(revoke_user_session_by_public_id=AsyncMock())
     user_ctx = BrowserUserPrincipalContext(
-        user_id=1, organization_id=1, session_id="raw-session"
+        user_id=1,
+        organization_id=1,
+        raw_session_id="raw-session",
+        user_public_id=PublicId(1),
+        organization_public_id=PublicId(1),
     )
 
     with pytest.raises(CurrentSessionRequiresLogoutError) as exc_info:
         await revoke_session(
-            session_id=format_browser_session_id(public_id),
-            lifecycle_service=lifecycle_service,  # type: ignore[arg-type]
-            revocation_service=revocation_service,  # type: ignore[arg-type]
+            session_id=public_id,
+            lifecycle_service=lifecycle_service,  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+            revocation_service=revocation_service,  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
             user_ctx=user_ctx,
         )
 

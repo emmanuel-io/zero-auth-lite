@@ -2,43 +2,43 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Path, Query, Response, Security, status
+from fastapi import APIRouter, Path, Security, status
+from pydantic import UUID4
 
 from app.api.error_responses import app_error_responses
-from app.api.schemas import DEFAULT_PAGE_LIMIT_MAX, PaginatedResponse
+from app.api.schemas import PaginatedResponse
+from app.api.v1.organization.oauth2_sessions.mapping import (
+    organization_oauth2_session_response,
+)
 from app.api.v1.organization.oauth2_sessions.schemas import (
     OAuth2RevocationResponse,
-    OAuth2SessionResponse,
+    OrganizationOAuth2SessionListQueryDep,
+    OrganizationOAuth2SessionResponse,
 )
 from app.browser_sessions.errors import (
-    CSRFCookieHeaderMismatchError,
-    CSRFHeaderSessionMismatchError,
-    CSRFMissingCookieError,
-    CSRFMissingHeaderError,
-    SessionInvalidError,
+    BrowserSessionInvalidError,
+    CSRF_ERRORS,
 )
-from app.errors import ForbiddenOperationError, UnauthorizedError
-from app.identity.public_ids import parse_user_id, USER_ID_PATTERN
-from app.oauth2.organization_oauth2_session_dependencies import (
+from app.core.errors.common import ForbiddenOperationError, UnauthorizedError
+from app.oauth2.organization_oauth2_sessions.dependencies import (
     OrganizationOAuth2SessionServiceDep,
 )
-from app.oauth2.organization_oauth2_sessions import (
+from app.oauth2.organization_oauth2_sessions.service import (
     OrganizationOAuth2SessionNotFoundError,
 )
-from app.oauth2.public_ids import OAUTH2_SESSION_ID_PATTERN, parse_oauth2_session_id
-from app.oauth2.settings import OAuth2GrantType
-from app.oauth2.specs import OAuth2Specs
 from app.openapi_tags import ORGANIZATION_ADMINISTRATION_V1_TAG
 from app.security.authorization import require_organization_admin_permission
-from app.security.dtos import UserPrincipalContext
 from app.security.permissions import Permission
+from app.security.principals import UserPrincipalContext
 
 
 router = APIRouter(prefix="/oauth2", tags=[ORGANIZATION_ADMINISTRATION_V1_TAG])
-OrganizationOAuth2SessionListResponse = PaginatedResponse[OAuth2SessionResponse]
+OrganizationOAuth2SessionListResponse = PaginatedResponse[
+    OrganizationOAuth2SessionResponse
+]
 OAUTH2_SESSION_READ_AUTH_RESPONSES = app_error_responses(
     UnauthorizedError,
-    SessionInvalidError,
+    BrowserSessionInvalidError,
     ForbiddenOperationError,
     descriptions={
         status.HTTP_401_UNAUTHORIZED: "Missing or invalid authentication.",
@@ -51,12 +51,9 @@ OAUTH2_SESSION_READ_AUTH_RESPONSES = app_error_responses(
 )
 OAUTH2_SESSION_WRITE_AUTH_RESPONSES = app_error_responses(
     UnauthorizedError,
-    SessionInvalidError,
+    BrowserSessionInvalidError,
     ForbiddenOperationError,
-    CSRFMissingCookieError,
-    CSRFMissingHeaderError,
-    CSRFCookieHeaderMismatchError,
-    CSRFHeaderSessionMismatchError,
+    *CSRF_ERRORS,
     descriptions={
         status.HTTP_401_UNAUTHORIZED: "Missing or invalid authentication.",
         status.HTTP_403_FORBIDDEN: (
@@ -69,18 +66,15 @@ OAUTH2_SESSION_WRITE_AUTH_RESPONSES = app_error_responses(
 )
 OAUTH2_SESSION_REVOCATION_RESPONSES = app_error_responses(
     UnauthorizedError,
-    SessionInvalidError,
+    BrowserSessionInvalidError,
     ForbiddenOperationError,
-    CSRFMissingCookieError,
-    CSRFMissingHeaderError,
-    CSRFCookieHeaderMismatchError,
-    CSRFHeaderSessionMismatchError,
+    *CSRF_ERRORS,
     OrganizationOAuth2SessionNotFoundError,
     descriptions={
         status.HTTP_401_UNAUTHORIZED: "Missing or invalid authentication.",
         status.HTTP_403_FORBIDDEN: (
-            "Organization-admin role, the organization:write permission, and valid "
-            "CSRF proof are required."
+            "The organization-admin role or organization:write permission is "
+            "missing, or a browser-session request lacks valid CSRF proof."
         ),
         status.HTTP_404_NOT_FOUND: (
             "OAuth2 session not found in the authenticated organization."
@@ -120,70 +114,26 @@ OrganizationOAuth2SessionsWriteDep = Annotated[
         **OAUTH2_SESSION_READ_AUTH_RESPONSES,
     },
 )
-async def list_oauth2_sessions(  # noqa: PLR0913
+async def list_oauth2_sessions(
     *,
-    response: Response,
     service: OrganizationOAuth2SessionServiceDep,
     admin_ctx: OrganizationOAuth2SessionsReadDep,
-    client_id: Annotated[
-        str | None,
-        Query(
-            min_length=1,
-            max_length=OAuth2Specs.CLIENT_ID_LENGTH_MAX,
-            description="Return sessions issued to this OAuth2 client.",
-        ),
-    ] = None,
-    grant_type: Annotated[
-        OAuth2GrantType | None,
-        Query(description="Return sessions created by this OAuth2 grant type."),
-    ] = None,
-    user_id: Annotated[
-        str | None,
-        Query(
-            pattern=USER_ID_PATTERN,
-            description="Return sessions belonging to this organization user.",
-        ),
-    ] = None,
-    active_only: Annotated[
-        bool,
-        Query(
-            description=(
-                "Exclude expired families when true. Revoked families are deleted "
-                "and are never returned."
-            )
-        ),
-    ] = True,
-    offset: Annotated[
-        int,
-        Query(ge=0, description="Number of matching sessions to skip."),
-    ] = 0,
-    limit: Annotated[
-        int,
-        Query(
-            ge=1,
-            le=DEFAULT_PAGE_LIMIT_MAX,
-            description="Maximum number of sessions to return.",
-        ),
-    ] = 100,
+    query: OrganizationOAuth2SessionListQueryDep,
 ) -> OrganizationOAuth2SessionListResponse:
     """List retained current token families in the current organization."""
-    response.headers["Cache-Control"] = "no-store"
     page = await service.list_sessions(
-        admin_ctx=admin_ctx,
-        client_id=client_id,
-        grant_type=grant_type,
-        user_public_id=parse_user_id(user_id) if user_id is not None else None,
-        active_only=active_only,
-        offset=offset,
-        limit=limit,
+        actor_ctx=admin_ctx,
+        client_id=query.client_id,
+        grant_type=query.grant_type,
+        user_public_id=(query.user_id if query.user_id is not None else None),
+        active_only=query.active_only,
+        offset=query.offset,
+        limit=query.limit,
     )
     return OrganizationOAuth2SessionListResponse(
-        items=[
-            OAuth2SessionResponse.model_validate(session, from_attributes=True)
-            for session in page.items
-        ],
-        offset=offset,
-        limit=limit,
+        items=[organization_oauth2_session_response(session) for session in page.items],
+        offset=query.offset,
+        limit=query.limit,
         total=page.total,
     )
 
@@ -196,8 +146,8 @@ async def list_oauth2_sessions(  # noqa: PLR0913
 )
 async def revoke_oauth2_client_token_families(
     client_id: Annotated[
-        str,
-        Path(min_length=1, max_length=OAuth2Specs.CLIENT_ID_LENGTH_MAX),
+        UUID4,
+        Path(description="OAuth2 client identifier"),
     ],
     service: OrganizationOAuth2SessionServiceDep,
     admin_ctx: OrganizationOAuth2SessionsWriteDep,
@@ -205,7 +155,7 @@ async def revoke_oauth2_client_token_families(
     """Revoke every token family issued to one client in the current organization."""
     dto = await service.revoke_client_token_families(
         client_id=client_id,
-        admin_ctx=admin_ctx,
+        actor_ctx=admin_ctx,
     )
     return OAuth2RevocationResponse.model_validate(dto, from_attributes=True)
 
@@ -218,9 +168,8 @@ async def revoke_oauth2_client_token_families(
 )
 async def revoke_oauth2_session(
     session_id: Annotated[
-        str,
+        UUID4,
         Path(
-            pattern=OAUTH2_SESSION_ID_PATTERN,
             description="OAuth2 session identifier",
         ),
     ],
@@ -229,7 +178,7 @@ async def revoke_oauth2_session(
 ) -> OAuth2RevocationResponse:
     """Revoke one token family and end its OAuth2 session."""
     dto = await service.revoke_session(
-        session_public_id=parse_oauth2_session_id(session_id),
-        admin_ctx=admin_ctx,
+        session_public_id=session_id,
+        actor_ctx=admin_ctx,
     )
     return OAuth2RevocationResponse.model_validate(dto, from_attributes=True)

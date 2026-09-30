@@ -5,8 +5,8 @@ authorization server and publish the matching public key through JWKS when
 clients need offline verification.
 
 Generate deployment keys outside the repository and provide base64-encoded raw
-key material through `OAuth2Settings.prv_key_b64` and
-`OAuth2Settings.pub_key_b64`. Also configure a stable issuer, audience, and
+key material through `OAuth2Settings.signing_private_key_b64` and
+`OAuth2Settings.signing_public_key_b64`. Also configure a stable issuer, audience, and
 non-empty key ID. Tokens verified against the rotation key set must carry this
 `kid` header; tokens with a missing, empty, or unknown key ID are rejected
 before signature verification.

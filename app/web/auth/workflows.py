@@ -3,7 +3,7 @@
 from logging import getLogger
 from typing import Annotated
 
-from fastapi import APIRouter, Form, Query, Request, Response, status
+from fastapi import APIRouter, Form, Query, Request, Response
 from pydantic import ValidationError
 from starlette.responses import HTMLResponse, RedirectResponse
 
@@ -11,7 +11,6 @@ from app.browser_sessions.dependencies import (
     CurrentBrowserFormUserContextDep,
     get_resolved_browser_session,
     PublicOptionalBrowserUserContextDep,
-    SessionRevocationServiceDep,
 )
 from app.browser_sessions.form_csrf import (
     get_or_create_pre_session_form_csrf,
@@ -21,25 +20,33 @@ from app.browser_sessions.form_csrf import (
 from app.browser_sessions.response_transport import (
     request_session_cookie_clear_on_success,
 )
+from app.browser_sessions.service_dependencies import BrowserSessionRevocationServiceDep
 from app.core.errors.base import AppError
 from app.db.dependencies import DbSessionDep
-from app.events.dependencies import (
-    AuthNotificationRequestServiceDep,
-    EventPublisherDep,
-)
+from app.identity.dependencies import RegistrationServiceDep
 from app.identity.dtos import RegistrationCreateDTO
-from app.identity.public_ids import format_user_id
-from app.identity.registration import RegistrationService
 from app.identity.users.emails import validate_user_email
+from app.notifications.dependencies import AuthNotificationRequestServiceDep
 from app.openapi_tags import BUILTIN_AUTH_UI_TAG
-from app.password.dependencies import PasswordHasherDep
 from app.settings.dependencies import (
     CSRFSettingsDep,
     SettingsDep,
 )
 from app.settings.root import Settings
-from app.web.redirects import authentication_entry_url, workflow_completion_url
-from app.web.rendering import render_page
+from app.settings.ui import BUILTIN_LOGOUT_PATH
+from app.web.auth.inputs import (
+    EmailForm,
+    FirstNameForm,
+    LastNameForm,
+    OrganizationNameForm,
+    PasswordForm,
+)
+from app.web.redirects import (
+    management_authentication_entry_url,
+    workflow_completion_url,
+)
+from app.web.rendering import no_store_redirect, render_page
+from app.web.routes import BrowserPageRoute
 
 
 logger = getLogger(__name__)
@@ -47,11 +54,7 @@ logger = getLogger(__name__)
 
 def _redirect(path: str) -> RedirectResponse:
     """Return a no-store PRG redirect."""
-    return RedirectResponse(
-        path,
-        status_code=status.HTTP_303_SEE_OTHER,
-        headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
-    )
+    return no_store_redirect(path)
 
 
 def _request_page(  # noqa: PLR0913
@@ -82,9 +85,11 @@ def _request_page(  # noqa: PLR0913
     return response
 
 
-router = APIRouter(tags=[BUILTIN_AUTH_UI_TAG])
-registration_router = APIRouter(tags=[BUILTIN_AUTH_UI_TAG])
-session_router = APIRouter(tags=[BUILTIN_AUTH_UI_TAG])
+router = APIRouter(tags=[BUILTIN_AUTH_UI_TAG], route_class=BrowserPageRoute)
+registration_router = APIRouter(
+    tags=[BUILTIN_AUTH_UI_TAG], route_class=BrowserPageRoute
+)
+session_router = APIRouter(tags=[BUILTIN_AUTH_UI_TAG], route_class=BrowserPageRoute)
 
 
 @registration_router.get("/register")
@@ -114,15 +119,14 @@ async def submit_registration(  # noqa: PLR0913
     *,
     request: Request,
     db_session: DbSessionDep,
-    event_publisher: EventPublisherDep,
-    password_hasher: PasswordHasherDep,
+    registration_service: RegistrationServiceDep,
     csrf_settings: CSRFSettingsDep,
     settings: SettingsDep,
-    email: Annotated[str, Form()],
-    password: Annotated[str, Form()],
-    organization_name: Annotated[str, Form()],
-    first_name: Annotated[str, Form()] = "",
-    last_name: Annotated[str, Form()] = "",
+    email: EmailForm,
+    password: PasswordForm,
+    organization_name: OrganizationNameForm,
+    first_name: FirstNameForm = "",
+    last_name: LastNameForm = "",
     csrf_token: Annotated[str | None, Form()] = None,
 ) -> RedirectResponse:
     """Validate a form and call the canonical registration service."""
@@ -137,11 +141,7 @@ async def submit_registration(  # noqa: PLR0913
             first_name=first_name,
             last_name=last_name,
         )
-        await RegistrationService(
-            db_session=db_session,
-            event_publisher=event_publisher,
-            password_hasher=password_hasher,
-        ).register(
+        await registration_service.register(
             registration=registration,
         )
     except (ValidationError, AppError):
@@ -172,7 +172,7 @@ async def submit_resend_verification(  # noqa: PLR0913
     notification_requests: AuthNotificationRequestServiceDep,
     csrf_settings: CSRFSettingsDep,
     settings: SettingsDep,
-    email: Annotated[str, Form()],
+    email: EmailForm,
     csrf_token: Annotated[str | None, Form()] = None,
 ) -> RedirectResponse:
     """Publish the same opaque verification request used by the JSON adapter."""
@@ -209,7 +209,7 @@ async def submit_forgot_password(  # noqa: PLR0913
     notification_requests: AuthNotificationRequestServiceDep,
     csrf_settings: CSRFSettingsDep,
     settings: SettingsDep,
-    email: Annotated[str, Form()],
+    email: EmailForm,
     csrf_token: Annotated[str | None, Form()] = None,
 ) -> RedirectResponse:
     """Publish the same opaque reset request used by the JSON adapter."""
@@ -224,7 +224,7 @@ async def submit_forgot_password(  # noqa: PLR0913
     return _redirect(workflow_completion_url(settings, notice="reset-sent"))
 
 
-@session_router.get("/logout")
+@session_router.get(BUILTIN_LOGOUT_PATH)
 async def logout_page(
     request: Request,
     principal: PublicOptionalBrowserUserContextDep,
@@ -232,7 +232,7 @@ async def logout_page(
 ) -> Response:
     """Render logout using the authenticated session CSRF value."""
     if principal is None:
-        return _redirect(authentication_entry_url(settings))
+        return _redirect(management_authentication_entry_url(settings))
     session = get_resolved_browser_session(request)
     if session is None:
         msg = "Resolved browser context requires matching session state."
@@ -240,35 +240,33 @@ async def logout_page(
     return render_page(request, "auth/logout.html", csrf_token=session.csrf)
 
 
-@session_router.post("/logout")
+@session_router.post(BUILTIN_LOGOUT_PATH)
 async def submit_logout(
     request: Request,
     principal: CurrentBrowserFormUserContextDep,
-    revocation_service: SessionRevocationServiceDep,
+    revocation_service: BrowserSessionRevocationServiceDep,
     settings: SettingsDep,
+    csrf_token: Annotated[str | None, Form()] = None,
 ) -> RedirectResponse:
     """Revoke the current session through the canonical revocation service."""
-    revoked = await revocation_service.logout(session_id=principal.session_id)
+    del csrf_token
+    revoked = await revocation_service.logout(session_id=principal.raw_session_id)
     logger.info(
         (
             "event=browser_session_revocation outcome=attempted subject_id=%s "
             "reason=logout revoked_sessions=%s"
         ),
-        format_user_id(principal.user_public_id)
-        if principal.user_public_id
-        else "unknown",
+        str(principal.user_public_id) if principal.user_public_id else "unknown",
         int(revoked),
     )
     request_session_cookie_clear_on_success(request)
     return _redirect(workflow_completion_url(settings, notice="signed-out"))
 
 
-def create_auth_workflow_router(settings: Settings) -> APIRouter:
+def create_identity_workflow_router(settings: Settings) -> APIRouter:
     """Compose built-in form workflows according to feature flags."""
     composed = APIRouter()
     composed.include_router(router)
-    if settings.session.enabled:
-        composed.include_router(session_router)
-    if settings.auth.registration_enabled:
+    if settings.identity_workflow.registration_enabled:
         composed.include_router(registration_router)
     return composed

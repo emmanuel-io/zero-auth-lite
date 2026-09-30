@@ -17,14 +17,16 @@ focused service construction.
 OAuth2 endpoints return RFC-style error names such as `invalid_request`,
 `invalid_client`, `invalid_grant`, `authorization_pending`, and `slow_down`.
 Clients must use the protocol error field rather than parsing human-readable
-descriptions.
+descriptions. Unexpected protocol failures use `500 server_error`; transient
+SQLite contention uses `503 temporarily_unavailable` with `Retry-After`.
 
-## Session And Application Errors
+## JSON Session And Application Errors
 
 Session services raise server exceptions for invalid credentials, invalid or
-expired sessions, CSRF failures, and account state. FastAPI handlers translate
-these into HTTP responses. Application domain errors, request-validation
-errors, and plain `HTTPException` responses use the same envelope:
+expired sessions, CSRF failures, and account state. On application-owned JSON
+routes, FastAPI handlers translate application domain errors,
+request-validation errors, and plain `HTTPException` responses into the same
+envelope:
 
 ```json
 {
@@ -41,9 +43,16 @@ message, and static response headers. The
 runtime handler and the OpenAPI response examples consume those same values so
 the documented contract matches the serialized response.
 
-Bearer access-token verification and persisted OAuth2-session failures use the
-application code `INVALID_ACCESS_TOKEN`. Standardized OAuth2 and OIDC endpoints
-translate both categories to the protocol error `invalid_token` instead.
+On application-owned routes, Bearer access-token verification and persisted
+OAuth2-session failures are normalized to the application code `UNAUTHORIZED`.
+The OpenID Connect UserInfo endpoint translates both categories to the protocol
+error `invalid_token` instead.
+
+External OAuth2 interaction routes use
+`400 OAUTH2_INTERACTION_INVALID` for missing, expired, consumed, or
+user/organization-mismatched handles. This deliberately prevents the frontend
+from distinguishing whether an opaque handle ever existed. Interaction,
+session, and CSRF responses carry `Cache-Control: no-store`.
 
 Request validation uses the application code `VALIDATION`. Its details contain
 only a value location, a safe message, and the Pydantic validation type. Raw
@@ -64,6 +73,17 @@ sensitive or non-serializable data:
 }
 ```
 
+## Browser Presentation Errors
+
+Built-in browser routes render failures as safe HTML rather than returning the
+JSON envelope. This applies to authentication pages, OAuth2 interaction pages,
+and the `/management/organization` and `/management/operator` management interfaces. Management requests
+initiated by htmx receive an HTML fragment suitable for the current page.
+
+Missing or invalid management authentication redirects to the configured login
+entry point. OAuth2 protocol endpoints remain separate: they return their
+standard protocol errors even when a browser initiated the request.
+
 Routes list the concrete application errors they expose. When several errors
 share one HTTP status, OpenAPI groups them under that response. Its example
 keys only distinguish documentation examples; clients use the `code` inside
@@ -72,9 +92,12 @@ Invalid user-list date ranges return `400 START_DATE_AFTER_END_DATE`. Removing
 an organization's final active, verified administrator returns
 `409 LAST_ACTIVE_ORGANIZATION_ADMIN`.
 
-SQLite unique, check, foreign-key, and not-null failures all use the stable
-application code `DATA_CONFLICT` and the generic message `The requested data
-conflicts with stored data.` In `development`, `details` may contain one safe
+SQLite unique, check, foreign-key, and not-null failures that do not represent
+a recognized domain conflict use the stable application code `DATA_CONFLICT`
+and the generic message `The requested data conflicts with stored data.` A
+known collision between active normalized email addresses uses
+`ALREADY_EXISTS`, including when the database constraint resolves a concurrent
+ownership race. In `development`, `DATA_CONFLICT` details may contain one safe
 diagnostic whose type is `unique_violation`, `check_violation`,
 `foreign_key_violation`, or `not_null_violation`. Its location is empty because
 a relational constraint does not necessarily identify one HTTP field. These
@@ -92,7 +115,15 @@ OAuth2 protocol errors remain separate and retain their RFC-style
 Authentication failures preserve their `WWW-Authenticate` challenge. CSRF
 failures use `403`, while absent or invalid authentication uses `401`. Browser
 session failures return the `Session` challenge, bearer failures return the
-`Bearer` challenge, and transient SQLite lock failures include `Retry-After`.
+`Bearer` challenge, and a request with no credentials advertises every enabled
+application authentication transport (`Bearer, Session` when both are enabled).
+Transient SQLite lock failures include `Retry-After`.
+
+CSRF error codes distinguish the rejected proof component. In particular,
+`CSRF_REQUEST_SOURCE_MISSING` means neither `Origin` nor `Referer` was present,
+while `CSRF_REQUEST_SOURCE_UNTRUSTED` means the supplied request source was
+malformed or outside the configured trusted origins. Token-cookie divergence
+continues to use `CSRF_COOKIE_HEADER_MISMATCH`.
 
 Do not log raw passwords, session cookies, authorization codes, access tokens,
 refresh tokens, client secrets, or single-use workflow tokens when handling

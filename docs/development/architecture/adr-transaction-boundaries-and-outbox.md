@@ -28,11 +28,19 @@ Every operation belongs to one of four explicit categories:
 3. A **persistent security mutation** commits before deliberately returning a
    protocol error. Refresh-token reuse/expiry revocation and device polling
    throttling are examples. Each such commit is documented at the call site.
-4. An **expensive credential mutation** may release a completed read
-   transaction before password hashing, then use a dedicated short write with
-   a conditional update. Such a method is named ``*_autonomously`` and cannot
-   be composed atomically with unrelated request-scoped writes. Password
-   change uses this category so Argon2 work never holds a SQLite transaction.
+   Device polling acquires SQLite's writer lock with a targeted no-op update
+   before reading the polling state. Concurrent polls therefore serialize and
+   observe the preceding poll's committed timestamp and interval.
+   Token grants similarly finish their client-authentication and grant-state
+   reads explicitly at the call site before a targeted no-op update starts the
+   short issuance write transaction. The same SQLAlchemy session retains that
+   writer lock through client-policy revalidation and token issuance.
+4. An **expensive credential mutation** rolls back its request transaction
+   before password hashing, then uses a dedicated short write with a
+   conditional update. Such a method is named `*_autonomously` and cannot be
+   composed atomically with request-scoped writes. Password changes and OAuth2
+   client-secret rotations use this category so automatic session activity is
+   discarded and Argon2 work never holds a SQLite transaction.
 
 Private mutation helpers and relational services call `flush()` only. The public
 service method owns the commit decision. Logs emitted before that commit use
@@ -41,14 +49,17 @@ committed result. No external business side effect is executed before commit.
 
 ## Durable Outbox
 
-`EventPublisher.publish(event)` means “persist this delivery intention in the
-current transaction.” It does not invoke a handler. The publisher writes one
-row to `auth_event_outbox` using the mutation's SQLAlchemy session, so the
-business change and delivery intention either commit or roll back together.
+`NotificationPublisher.publish(event)` means “persist this delivery intention
+in the current transaction.” It does not invoke a handler. The publisher
+writes one row to `notification_outbox` using the mutation's SQLAlchemy session,
+so the business change and delivery intention either commit or roll back
+together.
 
 The allowlist contains account verification, password reset, email change, and
-invitation notifications. Session revocations remain ordinary SQL writes in
-their business transaction.
+invitation notifications. Its runtime registry is shared by the publisher and
+dispatcher in `app/notifications/events.py`. Adding an event also requires a
+migration that extends the persisted `event_type` constraint. Session
+revocations remain ordinary SQL writes in their business transaction.
 
 The dedicated dispatcher processes at most one configured batch per poll, but
 claims each row only when it is ready to process it. This keeps a queued row's
@@ -56,7 +67,12 @@ lease from expiring behind slow SMTP calls. A lightweight heartbeat renews the
 lease while external delivery remains in flight. A conditional update prevents
 two workers from owning the same row. Failed deliveries retain their error and
 use capped exponential retry; expired leases are reclaimable after a crash.
-Delivered rows are retained temporarily and purged periodically.
+SQLite constraints keep attempt counts nonnegative, require complete lease and
+terminal-result pairs, and prevent a completed row from retaining a claim.
+Invalid persisted payloads, mail template failures, and registered event types
+without a notification builder are terminal because repeating the unchanged
+event cannot make them succeed. Terminal rows are retained temporarily and
+purged periodically.
 
 Delivery is **at least once**. A crash after SMTP accepts a message but before
 `processed_at` commits can send a duplicate. Exactly-once SMTP delivery would
@@ -96,15 +112,18 @@ rather than sending an unusable link.
 ## SQL Session Authority
 
 SQL remains authoritative for user activation, browser-session invalidation,
-OAuth2 sessions, token pairs, and consumed refresh-token history. A security
+OAuth2 sessions, token states, and consumed refresh-token history. A security
 change records `user.sessions_invalid_before`, ends OAuth2 sessions, deletes
-their token pairs, and revokes browser-session rows in the same transaction.
+their token states, and revokes browser-session rows in the same transaction.
 Browser-session resolution also rejects sessions older than the invalidation
 timestamp as defense in depth. No external cleanup event or cross-store
 compensation is required.
 
-Token issuance, rotation, token-family expiry, and refresh-token history share
-one SQL transaction. A failed commit can therefore be rolled back as one unit.
+Current refresh-token rotation, consumed-token history, and replacement token
+issuance share the request transaction. A failed commit can therefore roll back
+that replacement as one unit. Reuse revocation and token-family expiry instead
+use independent transactions so their security state persists before the route
+returns `invalid_grant`.
 
 ## Consequences
 

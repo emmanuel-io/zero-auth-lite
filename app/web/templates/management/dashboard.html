@@ -1,0 +1,59 @@
+{% extends "management/base.html" %}
+{% block title %}Home · Zero Auth Lite{% endblock %}
+{% block content %}
+  <header class="page-header">
+    <p class="eyebrow">Identity server</p>
+    <h1>Welcome back</h1>
+    <p class="muted">Choose a destination to manage your identity or the areas you administer.</p>
+  </header>
+  <div class="dashboard-grid">
+    <section class="feature-card">
+      <div><p class="feature-card__label">Personal</p><h2>Account</h2><p>Update your profile.</p></div>
+      <a class="card-link" href="/management/account">Manage account <span aria-hidden="true">→</span></a>
+    </section>
+    {% if show_organization_ui %}
+      <section class="feature-card">
+        <div>
+          <p class="feature-card__label">Administration</p>
+          <h2>Organization</h2>
+          <p>Manage your organization details, users, roles, and OAuth2 sessions.</p>
+        </div>
+        <a class="card-link" href="/management/organization">Manage organization <span aria-hidden="true">→</span>
+        </a>
+      </section>
+    {% endif %}
+    {% if show_operator_ui %}
+      <section class="feature-card">
+        <div>
+          <p class="feature-card__label">Control plane</p>
+          <h2>Operator</h2>
+          <p>Manage organizations, users, clients, and server-wide sessions.</p>
+        </div>
+        <a class="card-link" href="/management/operator">Open operator UI <span aria-hidden="true">→</span>
+        </a>
+      </section>
+    {% endif %}
+    {% if application_url %}
+      <section class="feature-card feature-card--quiet">
+        <div>
+          <p class="feature-card__label">Application</p>
+          <h2>Continue</h2>
+          <p>Return to the application configured for this identity server.</p>
+        </div>
+        <a class="card-link" href="{{ application_url }}">Open application <span aria-hidden="true">→</span>
+        </a>
+      </section>
+    {% endif %}
+    {% if show_api_docs %}
+      <section class="feature-card feature-card--quiet">
+        <div>
+          <p class="feature-card__label">Development</p>
+          <h2>API documentation</h2>
+          <p>Inspect the application and protocol contracts exposed by this server.</p>
+        </div>
+        <a class="card-link" href="/api/docs">Open API docs <span aria-hidden="true">→</span>
+        </a>
+      </section>
+    {% endif %}
+  </div>
+{% endblock %}

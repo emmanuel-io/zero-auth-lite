@@ -37,7 +37,9 @@ class DeviceVerificationForm:
             str, Form(min_length=1, max_length=OAuth2Specs.PROTOCOL_VALUE_LENGTH_MAX)
         ],
         decision: Annotated[Literal["approve", "deny"], Form()],
+        csrf_token: Annotated[str | None, Form()] = None,
     ) -> None:
         """Store the device verification decision."""
         self.user_code = user_code
         self.decision = decision
+        self.csrf_token = csrf_token

@@ -2,13 +2,13 @@
 
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, UUID4
 
-from app.auth_tokens.specs import AuthTokenSpecs
 from app.identity.organizations.types import OrganizationName
-from app.identity.users.enums import OrganizationUserRole
+from app.identity.users.enums import OrganizationMembershipRole
 from app.identity.users.types import UserEmail, UserFirstName, UserLastName
 from app.password.validation import StrongPassword
+from app.workflow_tokens.specs import WorkflowTokenSpecs
 
 
 class EmailRequest(BaseModel):
@@ -25,7 +25,10 @@ class RegisterRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     email: Annotated[UserEmail, Field(description="User email address.")]
-    password: Annotated[StrongPassword, Field(description="User password.")]
+    password: Annotated[
+        StrongPassword,
+        Field(description="User password.", json_schema_extra={"writeOnly": True}),
+    ]
     first_name: Annotated[UserFirstName, Field(description="User first name.")] = ""
     last_name: Annotated[UserLastName, Field(description="User last name.")] = ""
     organization_name: Annotated[
@@ -36,32 +39,39 @@ class RegisterRequest(BaseModel):
 class RegistrationResponse(BaseModel):
     """Public result of organization and initial-user registration."""
 
-    id: str
-    organization_id: str
+    public_id: UUID4 = Field(serialization_alias="id")
+    organization_public_id: UUID4 = Field(serialization_alias="organization_id")
     email: str
     first_name: str
     last_name: str
     is_active: bool
-    role: OrganizationUserRole
+    role: OrganizationMembershipRole
     email_verified: bool
 
 
-class TokenConfirmRequest(BaseModel):
-    """Request containing a raw authentication workflow token."""
+class WorkflowTokenConfirmRequest(BaseModel):
+    """Request containing a raw identity workflow token."""
 
     model_config = ConfigDict(extra="forbid")
 
     token: Annotated[
         str,
         Field(
-            min_length=AuthTokenSpecs.RAW_TOKEN_LENGTH_MIN,
-            max_length=AuthTokenSpecs.RAW_TOKEN_LENGTH_MAX,
-            description="Raw auth token.",
+            min_length=WorkflowTokenSpecs.RAW_TOKEN_LENGTH_MIN,
+            max_length=WorkflowTokenSpecs.RAW_TOKEN_LENGTH_MAX,
+            description="Raw identity workflow token.",
+            json_schema_extra={"writeOnly": True},
         ),
     ]
 
 
-class PasswordTokenRequest(TokenConfirmRequest):
+class PasswordWorkflowTokenRequest(WorkflowTokenConfirmRequest):
     """Request containing a workflow token and a new password."""
 
-    password: Annotated[StrongPassword, Field(description="New user password.")]
+    password: Annotated[
+        StrongPassword,
+        Field(
+            description="New user password.",
+            json_schema_extra={"writeOnly": True},
+        ),
+    ]

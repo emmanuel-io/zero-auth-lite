@@ -4,17 +4,10 @@ from app.core.errors.base import AppError
 
 
 class MailError(AppError):
-    """Base exception for transactional mail failures."""
+    """Base exception for mail delivery failures."""
 
     code = "MAIL_ERROR"
-    message = "Transactional mail failed."
-
-
-class MailConfigurationError(MailError):
-    """Raised when mail settings cannot build a working provider."""
-
-    code = "MAIL_CONFIGURATION_ERROR"
-    message = "Mail provider is not configured correctly."
+    message = "Mail delivery failed."
 
 
 class MailDeliveryError(MailError):

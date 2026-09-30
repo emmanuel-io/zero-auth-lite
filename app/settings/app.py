@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, IPvAnyNetwork
 
 
 class AppSettings(BaseModel):
@@ -12,5 +12,5 @@ class AppSettings(BaseModel):
 
     environment: Literal["development", "deployment"] = "development"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
-    trusted_proxy_ips: tuple[str, ...] = ()
+    trusted_proxy_ips: tuple[IPvAnyNetwork, ...] = ()
     trusted_hosts: tuple[str, ...] = ()

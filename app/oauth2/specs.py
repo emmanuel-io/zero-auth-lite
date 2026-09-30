@@ -12,7 +12,7 @@ class OAuth2Specs:
     """
 
     JWT_SIGNING_ALGORITHM: Final[str] = "Ed25519"
-    CLIENT_ID_LENGTH_MAX: Final[int] = 32
+    CLIENT_ID_LENGTH_MAX: Final[int] = 36
     CLIENT_SECRET_HASH_LENGTH_MAX: Final[int] = 128
     CLIENT_NAME_LENGTH_MAX: Final[int] = 100
     REDIRECT_URI_LENGTH_MAX: Final[int] = 256
@@ -20,7 +20,6 @@ class OAuth2Specs:
     HASH_LENGTH: Final[int] = SHA256_HEX_LENGTH
     TRANSACTION_TOKEN_BYTES: Final[int] = 32
     CLIENT_SECRET_BYTES: Final[int] = 32
-    CLIENT_ID_RANDOM_BYTES: Final[int] = 18
     CLIENT_ORGANIZATION_ASSIGNMENTS_MAX: Final[int] = 100
     AUTHORIZATION_CODE_BYTES: Final[int] = 48
     DEVICE_CODE_BYTES: Final[int] = 48

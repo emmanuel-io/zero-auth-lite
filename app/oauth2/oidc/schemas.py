@@ -1,18 +1,17 @@
 """Pydantic schemas for OpenID Connect routes."""
 
-from typing import Annotated, NotRequired, TypedDict
+from typing import NotRequired, TypedDict
 
-from pydantic import AnyUrl, BaseModel, Field
+from pydantic import AnyUrl, BaseModel, UUID4
 
 from app.core.types import EmailValue
-from app.identity.public_ids import USER_ID_PATTERN
 from app.oauth2.schemas import IssuerUrl
 
 
 class UserInfoResponse(TypedDict):
     """OIDC UserInfo response."""
 
-    sub: Annotated[str, Field(pattern=USER_ID_PATTERN)]
+    sub: UUID4
     email: NotRequired[EmailValue]
     email_verified: NotRequired[bool]
     name: NotRequired[str]
@@ -36,20 +35,3 @@ class OpenIDProviderMetadata(BaseModel):
     scopes_supported: list[str]
     claims_supported: list[str]
     code_challenge_methods_supported: list[str]
-
-
-class JWKRead(BaseModel):
-    """Published public JWK."""
-
-    kty: str
-    kid: str
-    use: str | None = None
-    alg: str | None = None
-    crv: str | None = None
-    x: str | None = None
-
-
-class JWKSResponse(BaseModel):
-    """Public JWKS response."""
-
-    keys: list[JWKRead]

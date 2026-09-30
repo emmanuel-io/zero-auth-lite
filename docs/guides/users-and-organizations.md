@@ -16,13 +16,36 @@ rather than only an OAuth2 token issuer.
 - An **organization administrator** creates, invites, updates, deactivates, or
   deletes users in their own organization.
 - A **server operator** manages users and organizations across the whole server
-  under `/api/v1/admin`.
+  under `/api/v1/server`.
 - An **OAuth2 client** requests delegated or machine access. It does not own the
   user's identity record.
 
 Authentication establishes the current user. Authorization then decides
 whether that user may change their own profile, administer their organization,
-or use the operator control plane.
+or use the server control plane.
+
+## Administration Terminology
+
+Zero Auth Lite separates resource scope from authorization roles:
+
+- **server** names resources and operations whose scope is the whole canonical
+  server. The HTTP surface is `/api/v1/server`;
+- **organization** names resources and operations constrained to the current
+  organization. The HTTP surface is `/api/v1/organization`;
+- **operator** is the server-wide role that authorizes user-backed operations
+  on the server surface;
+- **admin** is the organization membership role that authorizes operations on
+  the organization surface.
+
+The explicit organization session-revocation operation is the only route on
+this surface that also accepts a client-credentials principal with its documented
+scope and machine-organization policy. The route reference describes that
+exception; it does not turn the machine client into a server operator.
+
+The code follows the same distinction. `ServerUsersService` and `ServerUser*`
+describe server-scoped operations and representations. Authorization
+dependencies separately require the operator role. These names do not imply a
+separate user type.
 
 ## Lifecycle Overview
 
@@ -54,7 +77,7 @@ relationships use the stable organization public ID instead.
 
 Public registration is enabled by default. A deployment that provisions users
 through invitations or administrative APIs can set
-`ZA_AUTH__REGISTRATION_ENABLED=false`. The registration route and the
+`ZA_IDENTITY_WORKFLOW__REGISTRATION_ENABLED=false`. The registration route and the
 ability to request another self-registration verification message are then
 absent, including from OpenAPI. Confirmation remains available so a token
 issued before the setting changed can still be consumed. Controlled onboarding,
@@ -68,19 +91,21 @@ The verification flow has two steps:
    corresponding email as verified.
 
 The verification request belongs to self-registration and is mounted only when
-`auth.registration_enabled` is true. Confirmation is always mounted in the
+`identity_workflow.registration_enabled` is true. Confirmation is always mounted in the
 active authentication transport for already-issued tokens. A pending address
 change instead uses `POST /api/v1/auth/email/change/confirm`.
 
-With `ui.authentication=builtin`, notification recipients complete the same
+With `ui.identity_workflow_mode=builtin`, notification recipients complete the same
 service operations through the server-rendered `GET`/`POST /verify-email`,
 `/reset-password`, and `/accept-invite` pages. These HTML adapters use
 origin-checked anonymous form CSRF and show one generic error for an invalid,
-expired, or consumed link. `auth.email.frontend_base_url` remains the exact
-HTTP(S) origin used to construct notification links; credentials, paths, query
-strings, and fragments are rejected. It may point at this server or another
-consumer. With `ui.authentication=external`, the HTML authentication adapters
-are absent and the JSON confirmation APIs are available instead.
+expired, or consumed link. `ui.urls.verification`, `ui.urls.password_reset`, and
+`ui.urls.invitation` are the exact HTTP(S) destinations placed in notifications;
+credentials, query strings, and fragments are rejected. With
+`ui.identity_workflow_mode=external`, the HTML identity-workflow adapters
+are absent. The JSON confirmation APIs are controlled independently by
+`api.interactive_auth_routes_enabled`. The `disabled` presentation mode also removes
+the HTML adapters without implying that an external frontend exists.
 
 Changing an email address reuses normalization, uniqueness, pending-email, and
 verification behavior. Verification of an old address must not prove ownership
@@ -122,7 +147,7 @@ The user can sign in with that password after proving ownership of the address.
 
 Organization administrators can explicitly resend this notification with
 `POST /api/v1/organization/users/{user_id}/invitation`; operators use
-`POST /api/v1/admin/users/{user_id}/invitation`. Resending replaces the previous
+`POST /api/v1/server/users/{user_id}/invitation`. Resending replaces the previous
 active invitation token. An active, verified account returns an empty success
 without receiving another invitation. An inactive account returns
 `409 Conflict`; resending an invitation never reactivates it. Repeating an
@@ -130,6 +155,10 @@ unchanged email in a user `PATCH` does not resend an invitation.
 
 The invitation proves possession of the invitation channel; it does not grant
 operator privileges or allow the recipient to choose another organization.
+The server records whether invitation acceptance is still pending. Establishing
+or changing a password invalidates every unused invitation and password-reset
+token for the account. Delayed notification events created before that security
+change are discarded by the worker instead of creating a fresh stale link.
 
 ## Password Recovery
 
@@ -162,28 +191,33 @@ rules is a minimum input requirement, not evidence that a password is unique or
 safe to reuse; clients should still encourage password-manager-generated
 credentials.
 
+After a successful login, the password provider checks whether the stored hash
+still matches its current algorithm and cost policy. When an upgrade is needed,
+the server computes the replacement outside the SQLite transaction and writes it
+conditionally with the new browser session. A concurrent password change wins and
+prevents that session from being created. Confidential OAuth2 client secrets use
+the same conditional upgrade rule during client authentication.
+
 ## Self-Service Identity
 
-Authenticated users manage their current identity under `/api/v1/me`:
+Authenticated users manage their current identity, password, browser sessions,
+and OAuth2 sessions under `/api/v1/me`. The
+[route reference](../reference/routes.md#self-service-and-organization-administration)
+is the canonical inventory of methods and paths; this guide explains their
+lifecycle and authorization behavior.
 
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/api/v1/me` | Read the current profile. |
-| `PATCH` | `/api/v1/me` | Update selected supported profile fields. |
-| `POST` | `/api/v1/me/password` | Verify the current password and set a new one. |
-| `DELETE` | `/api/v1/me` | Delete the current identity and related auth state. |
-| `GET` | `/api/v1/me/sessions` | List owned browser sessions. |
-| `DELETE` | `/api/v1/me/sessions/{session_id}` | Revoke one owned session. |
-| `GET` | `/api/v1/me/authorizations` | List active OAuth2 client grants. |
-| `DELETE` | `/api/v1/me/authorizations/{authorization_id}` | Revoke one owned client grant and token family. |
-
-Authorization lists use offset pagination. Pass `offset` and `limit` and read
-results from `items`; `total` reports how many active grants match before the
+OAuth2 session lists use offset pagination. Pass `offset` and `limit` and read
+results from `items`; `total` reports how many active sessions match before the
 page is applied. Organization OAuth2-session administration uses the same
-response shape. Each current-user authorization reports
+`id` field for the UUIDv4 identifier and the same `scopes` string array. Each
+current-user OAuth2 session reports
 `last_token_issued_at`, which is the creation or most recent refresh-rotation
-time of its token pair. Reading an API with an access token does not update
+time of its token state. Reading an API with an access token does not update
 this value.
+
+Both current-user OAuth2 session routes require a browser session. A Bearer
+access token cannot inspect or revoke the OAuth2 session that issued it.
+Revocation also requires the session-bound CSRF token.
 
 The current identity and organization come from authenticated server state, never
 from a user-supplied organization identifier. Successful profile reads and updates
@@ -204,30 +238,18 @@ Profile payloads never accept password fields. Password changes use the
 dedicated `/api/v1/me/password` contract so credential verification remains
 visible: the caller supplies the current password and a policy-compliant new
 password. A successful change revokes every browser session and OAuth2 session,
-deletes refresh-token-backed token pairs, invalidates existing password-reset
+deletes refresh-token-backed token states, invalidates existing password-reset
 tokens and older pending reset requests, and clears the calling browser's
 session and CSRF cookies. The user must authenticate again with the new
 credential. Self-deletion also clears those browser cookies after the account
 and its related authentication state have been removed.
 
-The authorization routes require a browser session. They let a user inspect
-which OAuth2 clients still hold an active stored grant and revoke one without
-affecting unrelated browser sessions, clients, or identities.
-
 ## Organization Administration
 
 `/api/v1/organization/users` lets an organization administrator manage users
 only in the organization derived from their authenticated principal.
-
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/api/v1/organization/users` | List users in the authenticated organization. |
-| `POST` | `/api/v1/organization/users` | Create or invite an organization user. |
-| `GET` | `/api/v1/organization/users/{user_id}` | Read one organization user. |
-| `POST` | `/api/v1/organization/users/{user_id}/invitation` | Resend an invitation to an active, unverified user. |
-| `PATCH` | `/api/v1/organization/users/{user_id}` | Change supported user fields or state. |
-| `PUT` | `/api/v1/organization/users/{user_id}` | Replace administrator-managed fields. |
-| `DELETE` | `/api/v1/organization/users/{user_id}` | Permanently delete an organization user. |
+Its complete method and path inventory lives in the
+[route reference](../reference/routes.md#self-service-and-organization-administration).
 
 `PATCH` rejects `organization_id`, `is_operator`, `password`, and explicit `null`
 values. `PUT` replaces administrator-managed profile and state fields, not
@@ -252,12 +274,12 @@ a conflict with organization state, not a missing permission.
 
 ## Operator Administration
 
-The `/api/v1/admin/users` and `/api/v1/admin/organizations` routes are an explicit
+The `/api/v1/server/users` and `/api/v1/server/organizations` routes are an explicit
 server control plane. Operator authorization is global and therefore must not
 be inferred from the organization-admin role. Keeping the paths separate makes the
 change in trust boundary visible in both code and OpenAPI.
 
-`POST /api/v1/admin/users` always creates an active, unverified invitation. It
+`POST /api/v1/server/users` always creates an active, unverified invitation. It
 does not accept a password or initial lifecycle flags. The server stores an
 unusable generated credential, and accepting the invitation sets the first
 password and verifies the recipient's email. Granting operator authority, or
@@ -268,11 +290,11 @@ cannot be used before the recipient accepts the invitation.
 
 Organization-scoped user contracts neither expose nor accept `is_operator`.
 They also reject mutations of accounts that hold that global role. Operator
-accounts are changed only through `/api/v1/admin/users`, where server-operator
-authority and `users:write` are enforced.
+accounts are changed only through the `/api/v1/server/users` server API, where
+operator authority and `users:write` are enforced.
 
 Operators resend an invitation through the dedicated
-`POST /api/v1/admin/users/{user_id}/invitation` command. This command uses the
+`POST /api/v1/server/users/{user_id}/invitation` command. This command uses the
 same active-account rule as organization administration and does not modify lifecycle
 state itself.
 
@@ -287,10 +309,13 @@ the operator recount, so concurrent removals cannot both pass the invariant.
 ## Deactivation, Reactivation, And Deletion
 
 Deactivation prevents new authentication, revokes browser sessions, ends
-OAuth2 sessions, and removes refresh-token-backed token pairs. The canonical
-API checks this persisted state and rejects an otherwise unexpired JWT. An
-external resource server doing offline JWT validation cannot observe those
-changes and may accept that token until expiry.
+OAuth2 sessions, removes refresh-token-backed token states, and permanently
+invalidates every outstanding identity-workflow link. Verification, email-change,
+invitation, and password-reset links issued before deactivation cannot mutate the
+inactive account and do not become valid again after reactivation. The canonical API
+checks persisted account state and rejects an otherwise unexpired JWT. An external
+resource server doing offline JWT validation cannot observe those changes and may
+accept that token until expiry.
 
 Changing a user's organization-admin role, operator role, or organization also revokes
 browser sessions and ends OAuth2 sessions. Authorization state is read from SQL
@@ -298,7 +323,8 @@ on every canonical API request, but revocation additionally prevents an
 already-compromised session from inheriting newly granted authority.
 
 Reactivation allows future authentication but does not verify email, reset
-credentials, or recreate sessions. Deletion is permanent and removes related
+credentials, recreate sessions, or restore invalidated workflow links. Deletion is
+permanent and removes related
 authentication state through explicit `ON DELETE CASCADE` foreign keys. This
 includes browser sessions, OAuth2 sessions and tokens, workflow tokens, and the
 user's current, pending, and retired email rows. Callers should not treat

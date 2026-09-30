@@ -11,18 +11,22 @@ from app.browser_sessions.dependencies import (
     CurrentBrowserUserContextDep,
     PublicOptionalBrowserUserContextDep,
 )
+from app.http_paths import OAUTH2_AUTHORIZE_DECISION_PATH, OAUTH2_AUTHORIZE_PATH
 from app.oauth2.authorization.dependencies import AuthorizationRequestServiceDep
+from app.oauth2.authorization.dtos import (
+    AuthorizationTransactionCreateDTO,
+)
 from app.oauth2.authorization.forms import (
     AuthorizationDecisionForm,
     AuthorizationRequestForm,
     AuthorizationRequestParams,
 )
 from app.oauth2.authorization.http import (
+    authorization_interaction_entry_url,
     authorization_response,
     map_authorization_error,
 )
-from app.oauth2.authorization.navigation import authorization_login_url
-from app.oauth2.authorization.request import AuthorizationRequest
+from app.oauth2.authorization.request import AuthorizationRequestInput
 from app.oauth2.authorization.result import (
     AuthorizationConsentPage,
     AuthorizationRedirect,
@@ -32,10 +36,9 @@ from app.oauth2.authorization.transaction import (
     create_authorization_transaction_id,
     hash_authorization_transaction_id,
 )
-from app.oauth2.authorization.transaction_dtos import (
-    AuthorizationTransactionCreateDTO,
-)
+from app.oauth2.error_codes import OAuth2ErrorCode
 from app.oauth2.errors import OAuth2ProtocolError
+from app.oauth2.protocol_parameters import reject_repeated_protocol_parameters
 from app.oauth2.protocol_route import OAuth2ProtocolRoute
 from app.oauth2.schemas import OAuth2ErrorResponse
 from app.openapi_tags import OAUTH2_AUTHORIZATION_CODE_FLOW_TAG
@@ -46,14 +49,15 @@ from app.settings.dependencies import SettingsDep
 router = APIRouter(
     tags=[OAUTH2_AUTHORIZATION_CODE_FLOW_TAG],
     route_class=OAuth2ProtocolRoute,
+    dependencies=[Depends(reject_repeated_protocol_parameters)],
 )
 
 
-def _authorization_request(
+def _authorization_request_input(
     params: AuthorizationRequestParams | AuthorizationRequestForm,
-) -> AuthorizationRequest:
-    """Build the shared domain request from typed query or form parameters."""
-    return AuthorizationRequest(
+) -> AuthorizationRequestInput:
+    """Build client-controlled input from typed query or form parameters."""
+    return AuthorizationRequestInput(
         response_type=params.response_type,
         client_id=params.client_id,
         redirect_uri=params.redirect_uri,
@@ -66,7 +70,7 @@ def _authorization_request(
 
 
 @router.get(
-    "/authorize",
+    OAUTH2_AUTHORIZE_PATH,
     status_code=status.HTTP_302_FOUND,
     responses={
         302: {
@@ -76,6 +80,7 @@ def _authorization_request(
                 "and the original state."
             )
         },
+        303: {"description": "Redirect to the browser login or consent interaction."},
         400: {"description": "Invalid request.", "model": OAuth2ErrorResponse},
         401: {"description": "Browser authentication required."},
     },
@@ -89,7 +94,7 @@ async def authorize(
 ) -> Response:
     """Start Authorization Code (+ PKCE) flow."""
     result = await _handle_authorization_request(
-        request=_authorization_request(params),
+        request_input=_authorization_request_input(params),
         authorization_service=authorization_service,
         transaction_service=transaction_service,
         user_ctx=user_ctx,
@@ -99,7 +104,7 @@ async def authorize(
 
 
 @router.post(
-    "/authorize",
+    OAUTH2_AUTHORIZE_PATH,
     status_code=status.HTTP_302_FOUND,
     responses={
         302: {
@@ -108,6 +113,7 @@ async def authorize(
                 "state; errors carry error and the original state."
             )
         },
+        303: {"description": "Redirect to the browser login or consent interaction."},
         400: {
             "description": "Untrusted or malformed request.",
             "model": OAuth2ErrorResponse,
@@ -124,7 +130,7 @@ async def authorize_form_post(
 ) -> Response:
     """Process an authorization request submitted as form-urlencoded data."""
     result = await _handle_authorization_request(
-        request=_authorization_request(params),
+        request_input=_authorization_request_input(params),
         authorization_service=authorization_service,
         transaction_service=transaction_service,
         user_ctx=user_ctx,
@@ -135,7 +141,7 @@ async def authorize_form_post(
 
 async def _handle_authorization_request(
     *,
-    request: AuthorizationRequest,
+    request_input: AuthorizationRequestInput,
     authorization_service: AuthorizationRequestServiceDep,
     transaction_service: AuthorizationTransactionServiceDep,
     user_ctx: CurrentBrowserUserContextDep | None,
@@ -143,22 +149,24 @@ async def _handle_authorization_request(
 ) -> AuthorizationRedirect:
     """Run one typed authorization request through the shared service."""
     try:
-        validated = await authorization_service.validate_request(request)
+        validated = await authorization_service.validate_request(request_input)
     except ValueError as exc:
         raise map_authorization_error(exc) from exc
     if isinstance(validated, AuthorizationRedirect):
         return validated
     if user_ctx is None:
-        if not settings.ui.oauth2_interaction_is_builtin:
+        if settings.ui.oauth2_interaction_is_disabled:
             return authorization_service.deny_interaction(validated)
         transaction_id = await _create_authorization_transaction(
-            request=request,
+            request_input=request_input,
             authorization_service=authorization_service,
             transaction_service=transaction_service,
             user_ctx=None,
         )
         return AuthorizationRedirect(
-            url=authorization_login_url(settings, transaction_id=transaction_id),
+            url=authorization_interaction_entry_url(
+                settings, transaction_id=transaction_id
+            ),
             status_code=303,
         )
     try:
@@ -169,24 +177,29 @@ async def _handle_authorization_request(
     except ValueError as exc:
         raise map_authorization_error(exc) from exc
     if isinstance(result, AuthorizationConsentPage):
-        if not settings.ui.oauth2_interaction_is_builtin:
+        if settings.ui.oauth2_interaction_is_disabled:
             return authorization_service.deny_interaction(validated)
         transaction_id = await _create_authorization_transaction(
-            request=request,
+            request_input=request_input,
             authorization_service=authorization_service,
             transaction_service=transaction_service,
             user_ctx=user_ctx,
         )
-        return AuthorizationRedirect(
-            url=f"/consent?{urlencode({'transaction_id': transaction_id})}",
-            status_code=303,
+        interaction_url = (
+            f"{settings.ui.urls.authorization_consent}?"
+            f"{urlencode({'transaction_id': transaction_id})}"
+            if settings.ui.oauth2_interaction_is_builtin
+            else authorization_interaction_entry_url(
+                settings, transaction_id=transaction_id
+            )
         )
+        return AuthorizationRedirect(url=interaction_url, status_code=303)
     return result
 
 
 async def _create_authorization_transaction(
     *,
-    request: AuthorizationRequest,
+    request_input: AuthorizationRequestInput,
     authorization_service: AuthorizationRequestServiceDep,
     transaction_service: AuthorizationTransactionServiceDep,
     user_ctx: CurrentBrowserUserContextDep | None,
@@ -201,14 +214,14 @@ async def _create_authorization_transaction(
                     authorization_service.settings.authorization_code_hash_secret.get_secret_value()
                 ),
             ),
-            response_type=request.response_type,
-            client_id=request.client_id,
-            redirect_uri=request.redirect_uri,
-            scope=request.scope,
-            state=request.state,
-            nonce=request.nonce,
-            code_challenge=request.code_challenge,
-            code_challenge_method=request.code_challenge_method,
+            response_type=request_input.response_type,
+            client_id=request_input.client_id,
+            redirect_uri=request_input.redirect_uri,
+            scope=request_input.scope,
+            state=request_input.state,
+            nonce=request_input.nonce,
+            code_challenge=request_input.code_challenge,
+            code_challenge_method=request_input.code_challenge_method,
             user_id=user_ctx.user_id if user_ctx is not None else None,
             organization_id=user_ctx.organization_id if user_ctx is not None else None,
             expires_at=datetime.now(UTC)
@@ -219,7 +232,8 @@ async def _create_authorization_transaction(
 
 
 @router.post(
-    "/authorize/decision",
+    OAUTH2_AUTHORIZE_DECISION_PATH,
+    status_code=status.HTTP_302_FOUND,
     dependencies=[Security(cookie_sid)],
     responses={
         302: {
@@ -258,12 +272,12 @@ async def authorize_decision(
     )
     if transaction is None:
         raise OAuth2ProtocolError(
-            error="invalid_request",
+            error=OAuth2ErrorCode.INVALID_REQUEST,
             error_description="Invalid or expired authorization transaction.",
         )
-    params = AuthorizationRequest(
+    request_input = AuthorizationRequestInput(
         response_type=transaction.response_type,
-        client_id=transaction.client_id,
+        client_id=str(transaction.client_id),
         redirect_uri=transaction.redirect_uri,
         code_challenge=transaction.code_challenge,
         code_challenge_method=transaction.code_challenge_method,
@@ -274,14 +288,14 @@ async def authorize_decision(
     try:
         result = await authorization_service.authorize_code(
             user_ctx=user_ctx,
-            response_type=params.response_type,
-            client_id=params.client_id,
-            redirect_uri=params.redirect_uri,
-            scope=params.scope,
-            state=params.state,
-            nonce=params.nonce,
-            code_challenge=params.code_challenge,
-            code_challenge_method=params.code_challenge_method,
+            response_type=request_input.response_type,
+            client_id=request_input.client_id,
+            redirect_uri=request_input.redirect_uri,
+            scope=request_input.scope,
+            state=request_input.state,
+            nonce=request_input.nonce,
+            code_challenge=request_input.code_challenge,
+            code_challenge_method=request_input.code_challenge_method,
             consent=decision.decision,
         )
     except ValueError as exc:

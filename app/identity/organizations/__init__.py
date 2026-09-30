@@ -1,1 +1,1 @@
-"""Identity organization persistence and service modules."""
+"""Organization commands, DTOs, errors, and validated value types."""

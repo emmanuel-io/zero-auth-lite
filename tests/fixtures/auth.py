@@ -13,6 +13,8 @@ from fastapi import FastAPI
 from sqlalchemy import select
 from sqlalchemy.sql.selectable import ScalarSelect
 
+from tests.identifiers import TEST_USER_CLIENT_ID
+
 
 TEST_CODE_VERIFIER = (
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~"
@@ -70,7 +72,7 @@ async def login_browser(
     )
     return await client.post(
         "/api/v1/sessions/login",
-        json={"username": credentials.email, "password": credentials.password},
+        json={"email": credentials.email, "password": credentials.password},
         headers=headers,
     )
 
@@ -83,7 +85,7 @@ async def issue_user_token(
     scope: str = "read",
 ) -> httpx.Response:
     """Issue a user token through Authorization Code with PKCE."""
-    client_id = "test-user-client"
+    client_id = TEST_USER_CLIENT_ID
     redirect_uri = "https://test-client.example/callback"
     async with app.state.core_session_factory() as session:
         user = await session.scalar(
@@ -121,7 +123,7 @@ async def request_seeded_user_token(
     scope: str = "read",
 ) -> httpx.Response:
     """Issue a token for a user whose OAuth2 test client is already seeded."""
-    client_id = "test-user-client"
+    client_id = str(TEST_USER_CLIENT_ID)
     redirect_uri = "https://test-client.example/callback"
     await login_browser(client, credentials)
     authorize_response = await client.get(

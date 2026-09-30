@@ -1,57 +1,24 @@
 """Tests for route-level authorization dependencies."""
 
 import pytest
-from app.enums import Role
-from app.errors import ForbiddenOperationError
+from app.core.errors.common import ForbiddenOperationError
 from app.security.authorization import (
-    get_current_operator_context,
     PermissionMode,
-    require_oauth2_scopes,
     require_organization_admin_permission,
     require_permission,
     require_permissions,
 )
-from app.security.dtos import (
+from app.security.permissions import Permission
+from app.security.principals import (
     BrowserUserPrincipalContext,
     OAuth2UserPrincipalContext,
 )
-from app.security.permissions import Permission
+from app.security.roles import Role
+
+from tests.identifiers import deterministic_uuid, PublicId
 
 
 pytestmark = pytest.mark.unit
-
-
-@pytest.mark.asyncio
-@pytest.mark.negative
-async def test_operator_and_scope_dependencies_accept_and_reject_contexts() -> None:
-    """Assert operator and OAuth2 scope dependencies enforce privileges."""
-    admin_user = BrowserUserPrincipalContext(
-        user_id=1,
-        organization_id=2,
-        session_id="session",
-        roles=frozenset({Role.ORGANIZATION_ADMIN}),
-    )
-    scoped_principal = OAuth2UserPrincipalContext(
-        organization_id=2,
-        session_id=3,
-        user_id=1,
-        client_id="client",
-        scopes=frozenset({"read"}),
-    )
-    operator_user = BrowserUserPrincipalContext(
-        user_id=1,
-        organization_id=2,
-        session_id="session",
-        roles=frozenset({Role.OPERATOR}),
-    )
-    assert await get_current_operator_context(operator_user) == operator_user
-    assert await require_oauth2_scopes("read")(scoped_principal) == scoped_principal
-
-    with pytest.raises(ForbiddenOperationError):
-        await get_current_operator_context(admin_user)
-
-    with pytest.raises(ForbiddenOperationError):
-        await require_oauth2_scopes("write")(scoped_principal)
 
 
 @pytest.mark.asyncio
@@ -61,12 +28,16 @@ async def test_permission_dependencies_accept_and_reject_contexts() -> None:
     ordinary_user = BrowserUserPrincipalContext(
         user_id=1,
         organization_id=2,
-        session_id="session",
+        raw_session_id="session",
+        user_public_id=PublicId(1),
+        organization_public_id=PublicId(2),
     )
     operator = BrowserUserPrincipalContext(
         user_id=1,
         organization_id=2,
-        session_id="session",
+        raw_session_id="session",
+        user_public_id=PublicId(1),
+        organization_public_id=PublicId(2),
         roles=frozenset({Role.OPERATOR}),
     )
 
@@ -93,8 +64,10 @@ async def test_oauth2_user_permissions_are_limited_by_granted_scopes() -> None:
     scoped_admin = OAuth2UserPrincipalContext(
         user_id=1,
         organization_id=2,
-        session_id=3,
-        client_id="client",
+        oauth2_session_id=3,
+        client_id=deterministic_uuid("client"),
+        user_public_id=PublicId(1),
+        organization_public_id=PublicId(2),
         roles=frozenset({Role.ORGANIZATION_ADMIN}),
         scopes=frozenset({Permission.ORGANIZATION_READ.value}),
     )
@@ -116,8 +89,10 @@ async def test_organization_scope_does_not_grant_organization_admin_role() -> No
     scoped_member = OAuth2UserPrincipalContext(
         user_id=1,
         organization_id=2,
-        session_id=3,
-        client_id="client",
+        oauth2_session_id=3,
+        client_id=deterministic_uuid("client"),
+        user_public_id=PublicId(1),
+        organization_public_id=PublicId(2),
         scopes=frozenset({Permission.ORGANIZATION_READ.value}),
     )
 

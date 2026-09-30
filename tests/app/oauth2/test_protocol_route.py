@@ -1,18 +1,25 @@
 """Runtime tests for the OAuth2-only FastAPI validation boundary."""
 
 import base64
-from typing import Annotated, Literal
+from typing import Annotated, cast, Literal, TYPE_CHECKING
 
 import httpx
 import pytest
 from app.db.errors import DatabaseBusyError
+from app.oauth2.clients.auth_dependencies import OAuth2ClientBasicDep
+from app.oauth2.error_codes import OAuth2ErrorCode
 from app.oauth2.error_handler import oauth2_protocol_error_handler
 from app.oauth2.errors import OAuth2ProtocolError
-from app.oauth2.grants.dependencies import OAuth2ClientBasicDep
 from app.oauth2.protocol_route import OAuth2ProtocolRoute
 from fastapi import APIRouter, FastAPI, Form, Query, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import AnyUrl
+
+from tests.identifiers import deterministic_uuid
+
+
+if TYPE_CHECKING:
+    from starlette.types import ExceptionHandler
 
 
 pytestmark = pytest.mark.unit
@@ -67,7 +74,7 @@ async def test_protocol_validation_is_oauth2_scoped() -> None:
         client_secret: Annotated[str | None, Form()] = None,
     ) -> dict[str, str]:
         if basic_credentials is not None and (client_id or client_secret):
-            raise OAuth2ProtocolError(error="invalid_request")
+            raise OAuth2ProtocolError(error=OAuth2ErrorCode.INVALID_REQUEST)
         if basic_credentials is not None:
             return {
                 "source": "header",
@@ -80,14 +87,17 @@ async def test_protocol_validation_is_oauth2_scoped() -> None:
                 "client_id": client_id,
                 "client_secret": client_secret,
             }
-        raise OAuth2ProtocolError(error="invalid_request")
+        raise OAuth2ProtocolError(error=OAuth2ErrorCode.INVALID_REQUEST)
 
     @app.post("/application")
     async def application(name: Annotated[str, Form()]) -> dict[str, str]:
         return {"name": name}
 
     app.include_router(protocol_router)
-    app.add_exception_handler(OAuth2ProtocolError, oauth2_protocol_error_handler)
+    app.add_exception_handler(
+        OAuth2ProtocolError,
+        cast("ExceptionHandler", oauth2_protocol_error_handler),
+    )
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app),
@@ -109,12 +119,12 @@ async def test_protocol_validation_is_oauth2_scoped() -> None:
         )
         form_client_auth = await client.post(
             "/oauth2/client-auth",
-            data={"client_id": "client", "client_secret": "secret"},
+            data={"client_id": deterministic_uuid("client"), "client_secret": "secret"},
         )
         conflicting_client_auth = await client.post(
             "/oauth2/client-auth",
             headers={"Authorization": f"Basic {basic_secret}"},
-            data={"client_id": "client", "client_secret": "secret"},
+            data={"client_id": deterministic_uuid("client"), "client_secret": "secret"},
         )
         application_error = await client.post("/application")
 
@@ -139,7 +149,7 @@ async def test_protocol_validation_is_oauth2_scoped() -> None:
     assert form_client_auth.status_code == status.HTTP_200_OK
     assert form_client_auth.json() == {
         "source": "body",
-        "client_id": "client",
+        "client_id": str(deterministic_uuid("client")),
         "client_secret": "secret",
     }
     assert conflicting_client_auth.status_code == status.HTTP_400_BAD_REQUEST
@@ -174,3 +184,32 @@ async def test_database_busy_error_uses_oauth2_error_contract() -> None:
     assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
     assert response.headers["retry-after"] == "1"
     assert response.json() == {"error": "temporarily_unavailable"}
+
+
+@pytest.mark.asyncio
+async def test_unexpected_error_uses_oauth2_error_contract() -> None:
+    """Hide unexpected failures behind the logged protocol server error."""
+    app = FastAPI()
+    protocol_router = APIRouter(route_class=OAuth2ProtocolRoute)
+
+    @protocol_router.get("/oauth2/failure")
+    async def failure() -> None:
+        msg = "private implementation detail"
+        raise ValueError(msg)
+
+    app.include_router(protocol_router)
+    app.add_exception_handler(
+        OAuth2ProtocolError,
+        cast("ExceptionHandler", oauth2_protocol_error_handler),
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.get("/oauth2/failure")
+
+    assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    assert response.json() == {"error": "server_error"}
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["pragma"] == "no-cache"

@@ -1,29 +1,32 @@
 """Authorization for explicit-organization security-session revocation."""
 
 from dataclasses import dataclass
+from uuid import UUID
 
 from fastapi import status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors.base import AppError
+from app.core.errors.common import ForbiddenOperationError, ObjectNotFoundError
 from app.db.models.oauth2_client import (
     OAuth2ClientDB,
     OAuth2ClientMachineOrganizationDB,
 )
 from app.db.models.organization import OrganizationDB
-from app.errors import ForbiddenOperationError, ObjectNotFoundError
-from app.oauth2.clients.access import OAuth2ClientMachineOrganizationAccess
+from app.oauth2.clients.access import (
+    OAuth2ClientMachineOrganizationAccess,
+    organization_assignment_count_is_valid,
+)
 from app.oauth2.clients.dtos import OAuth2ClientReadDTO
-from app.oauth2.settings import OAuth2GrantType
-from app.public_ids import PublicId
-from app.security.dtos import (
+from app.oauth2.grants.types import OAuth2GrantType
+from app.security.permissions import Permission
+from app.security.principals import (
     AuthenticatedPrincipalContext,
-    AuthMethod,
+    AuthenticationMechanism,
     OAuth2ClientPrincipalContext,
     UserPrincipalContext,
 )
-from app.security.permissions import Permission
 
 
 class MachineClientOrganizationAccessDeniedError(AppError):
@@ -51,11 +54,11 @@ class OrganizationSecuritySessionAuthorizationService:
 
     @staticmethod
     def _require_operator(principal: UserPrincipalContext) -> None:
-        """Require operator authority and the users-write permission."""
-        has_permission = Permission.USERS_WRITE in principal.permissions
-        if principal.auth_method is AuthMethod.OAUTH2:
+        """Require operator authority and the sessions-write permission."""
+        has_permission = Permission.SESSIONS_WRITE in principal.permissions
+        if principal.authentication_mechanism is AuthenticationMechanism.OAUTH2_BEARER:
             has_permission = (
-                has_permission and Permission.USERS_WRITE.value in principal.scopes
+                has_permission and Permission.SESSIONS_WRITE.value in principal.scopes
             )
         if not principal.is_operator or not has_permission:
             raise ForbiddenOperationError
@@ -64,20 +67,31 @@ class OrganizationSecuritySessionAuthorizationService:
         self, principal: OAuth2ClientPrincipalContext
     ) -> OAuth2ClientReadDTO:
         """Reload and validate the machine client's current access policy."""
-        if Permission.USERS_WRITE.value not in principal.scopes:
+        if Permission.SESSIONS_WRITE.value not in principal.scopes:
             raise MachineClientOrganizationAccessDeniedError
         row = await self.db_session.scalar(
             select(OAuth2ClientDB).where(
                 OAuth2ClientDB.client_id == principal.client_id
             )
         )
-        client = OAuth2ClientReadDTO.model_validate(row) if row is not None else None
+        if row is None:
+            raise MachineClientOrganizationAccessDeniedError
+        client = OAuth2ClientReadDTO.model_validate(row)
         if (
-            client is None
-            or not client.is_active
-            or OAuth2GrantType.client_credentials.value not in client.grant_types
+            not client.is_active
+            or OAuth2GrantType.CLIENT_CREDENTIALS.value not in client.grant_types
             or client.machine_organization_access
             == OAuth2ClientMachineOrganizationAccess.NONE
+        ):
+            raise MachineClientOrganizationAccessDeniedError
+        assignment_count = await self.db_session.scalar(
+            select(func.count())
+            .select_from(OAuth2ClientMachineOrganizationDB)
+            .where(OAuth2ClientMachineOrganizationDB.client_id == row.id)
+        )
+        if not organization_assignment_count_is_valid(
+            mode=client.machine_organization_access,
+            assignment_count=assignment_count or 0,
         ):
             raise MachineClientOrganizationAccessDeniedError
         return client
@@ -85,7 +99,7 @@ class OrganizationSecuritySessionAuthorizationService:
     async def authorize(
         self,
         *,
-        organization_public_id: PublicId,
+        organization_public_id: UUID,
         principal: AuthenticatedPrincipalContext,
     ) -> AuthorizedOrganizationSecuritySessionRevocation:
         """Resolve and authorize one explicit organization target."""
@@ -97,7 +111,7 @@ class OrganizationSecuritySessionAuthorizationService:
 
         organization = await self.db_session.scalar(
             select(OrganizationDB).where(
-                OrganizationDB.public_id == int(organization_public_id)
+                OrganizationDB.public_id == organization_public_id
             )
         )
         if organization is None:

@@ -5,6 +5,7 @@ from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.browser_sessions.enums import LogoutScope
+from app.identity.users.specs import UserSpecs
 from app.password.validation import PasswordInput
 
 
@@ -13,9 +14,10 @@ class LoginRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    username: Annotated[
+    email: Annotated[
         str,
         Field(
+            max_length=UserSpecs.EMAIL_LENGTH_MAX,
             description="User email address.",
             json_schema_extra={"example": "bob@squaresponge.com"},
         ),

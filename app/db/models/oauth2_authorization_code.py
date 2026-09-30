@@ -1,8 +1,18 @@
 """SQLAlchemy model for OAuth2 authorization codes."""
 
 from datetime import datetime, UTC
+from uuid import UUID
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    text,
+    Uuid,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -15,8 +25,17 @@ class OAuth2AuthorizationCodeDB(Base, CreatedAtMixin):
 
     __tablename__ = "oauth2_authorization_code"
     __table_args__ = (
-        Index("ix_oauth2_auth_code_hash", "code_hash", unique=True),
+        CheckConstraint(
+            "code_challenge_method = 'S256'",
+            name="code_challenge_method_valid",
+        ),
+        Index("uq_oauth2_auth_code_hash", "code_hash", unique=True),
         Index("ix_oauth2_auth_code_client_expires", "client_id", "expires_at"),
+        Index(
+            "ix_oauth2_authorization_code_used_id",
+            "id",
+            sqlite_where=text("used_at IS NOT NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(
@@ -25,8 +44,8 @@ class OAuth2AuthorizationCodeDB(Base, CreatedAtMixin):
     code_hash: Mapped[str] = mapped_column(
         String(OAuth2Specs.HASH_LENGTH), nullable=False
     )
-    client_id: Mapped[str] = mapped_column(
-        String(OAuth2Specs.CLIENT_ID_LENGTH_MAX),
+    client_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
         ForeignKey("oauth2_client.client_id", ondelete="CASCADE"),
         nullable=False,
     )

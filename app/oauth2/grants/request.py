@@ -4,14 +4,14 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.oauth2.settings import OAuth2GrantType
+from app.oauth2.grants.types import OAuth2GrantType
 from app.oauth2.specs import OAuth2Specs
 
 
 class RefreshTokenGrantRequest(BaseModel):
     """Grant type for refreshing access tokens."""
 
-    grant_type: Literal[OAuth2GrantType.refresh_token]
+    grant_type: Literal[OAuth2GrantType.REFRESH_TOKEN]
     refresh_token: Annotated[
         str,
         Field(
@@ -48,7 +48,7 @@ class RefreshTokenGrantRequest(BaseModel):
 class AuthorizationCodeGrantRequest(BaseModel):
     """Grant type for exchanging authorization code for tokens."""
 
-    grant_type: Literal[OAuth2GrantType.authorization_code]
+    grant_type: Literal[OAuth2GrantType.AUTHORIZATION_CODE]
     code: Annotated[
         str,
         Field(
@@ -89,7 +89,7 @@ class AuthorizationCodeGrantRequest(BaseModel):
 class ClientCredentialsGrantRequest(BaseModel):
     """Grant type for client credentials flow."""
 
-    grant_type: Literal[OAuth2GrantType.client_credentials]
+    grant_type: Literal[OAuth2GrantType.CLIENT_CREDENTIALS]
     client_id: Annotated[
         str | None,
         Field(description="Client ID", max_length=OAuth2Specs.CLIENT_ID_LENGTH_MAX),
@@ -116,7 +116,7 @@ class ClientCredentialsGrantRequest(BaseModel):
 class DeviceCodeGrantRequest(BaseModel):
     """Grant type for device code polling."""
 
-    grant_type: Literal[OAuth2GrantType.device_code]
+    grant_type: Literal[OAuth2GrantType.DEVICE_CODE]
     device_code: Annotated[
         str,
         Field(

@@ -52,9 +52,9 @@ Examples may use Mailpit for local development.
 
 The package may define email-related protocols.
 
-Production email integrations are not part of the core scope.
-
-Do not add SendGrid, Mailgun, SES, Resend, Postmark, or SMTP provider-specific logic to the package.
+The canonical server includes a generic SMTP mail provider for authentication
+notifications. Keep provider-specific integrations such as SendGrid, Mailgun,
+SES, Resend, and Postmark outside the core package.
 
 ## Documentation Requirements
 

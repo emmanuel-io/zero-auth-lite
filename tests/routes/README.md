@@ -13,9 +13,10 @@ Mirror each stable public route prefix using the same directory segments:
 | `/api/v1/auth/*` | `tests/routes/api/v1/auth/` |
 | `/api/v1/me/*` | `tests/routes/api/v1/me/` |
 | `/api/v1/organization/*` | `tests/routes/api/v1/organization/` |
-| `/api/v1/admin/*` | `tests/routes/api/v1/admin/` |
+| `/api/v1/server/*` | `tests/routes/api/v1/server/` |
 | `/api/v1/sessions/*` | `tests/routes/api/v1/sessions/` |
 | `/oauth2/*` | `tests/routes/oauth2/` |
+| `/management/*` | `tests/routes/management/` |
 
 Use the public segment rather than a conceptual alias: `/api/v1/me` maps to
 `me/`, never `account/`. Stop adding directories at the owning route surface;
@@ -32,4 +33,6 @@ lifecycle, such as `auth/test_token_workflows.py`.
 
 Route tests must not import or re-export tests from another package.
 Feature-level router, service, persistence, schema, validation, and OpenAPI tests stay
-under `tests/app/`; shared setup belongs under `tests/fixtures/`.
+under `tests/app/`; shared setup and data builders belong under `tests/fixtures/`.
+Reusable fake service implementations for isolated tests belong under
+`tests/mocks/`.

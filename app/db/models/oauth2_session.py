@@ -1,8 +1,17 @@
 """SQLAlchemy model for OAuth2 grant and token-family sessions."""
 
 from datetime import datetime
+from uuid import UUID
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, String
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Uuid,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -16,9 +25,18 @@ class OAuth2SessionDB(Base, PublicIdMixin, CreatedAtMixin, UpdatedAtMixin):
     __tablename__ = "oauth2_session"
     __table_args__ = (
         CheckConstraint(
-            "(user_id IS NULL AND organization_id IS NULL) OR "
-            "(user_id IS NOT NULL AND organization_id IS NOT NULL)",
-            name="principal_pair",
+            "grant_type IN "
+            "('authorization_code', 'client_credentials', "
+            "'urn:ietf:params:oauth:grant-type:device_code')",
+            name="grant_type_valid",
+        ),
+        CheckConstraint(
+            "(grant_type = 'client_credentials' AND user_id IS NULL "
+            "AND organization_id IS NULL) OR "
+            "(grant_type IN ('authorization_code', "
+            "'urn:ietf:params:oauth:grant-type:device_code') "
+            "AND user_id IS NOT NULL AND organization_id IS NOT NULL)",
+            name="grant_principal_valid",
         ),
         Index("ix_oauth2_session_user_ended", "user_id", "ended_at"),
         Index(
@@ -41,8 +59,8 @@ class OAuth2SessionDB(Base, PublicIdMixin, CreatedAtMixin, UpdatedAtMixin):
     organization_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("organization.id", ondelete="CASCADE"), nullable=True
     )
-    client_id: Mapped[str] = mapped_column(
-        String(OAuth2Specs.CLIENT_ID_LENGTH_MAX),
+    client_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
         ForeignKey("oauth2_client.client_id", ondelete="CASCADE"),
         nullable=False,
         index=True,

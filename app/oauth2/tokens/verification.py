@@ -11,9 +11,10 @@ from joserfc.errors import JoseError
 from joserfc.jwk import OKPKey
 from joserfc.jwt import JWTClaimsRegistry
 
+from app.identifiers import parse_uuid4
 from app.oauth2.errors import OAuth2AccessTokenInvalidError
-from app.oauth2.oidc.keys import OAuth2VerifyKey
 from app.oauth2.principal_types import PrincipalType
+from app.oauth2.signing.keys import OAuth2VerifyKey
 from app.oauth2.specs import OAuth2Specs
 from app.oauth2.tokens.access import AccessTokenPayload
 
@@ -25,22 +26,22 @@ JWT_LEEWAY_SECONDS = 30
 def verify_access_token(
     *,
     token: str,
-    jwt_issuer: str,
-    jwt_audience: str,
+    issuer: str,
+    access_token_audience: str,
     key: ed25519.Ed25519PublicKey | str | tuple[OAuth2VerifyKey, ...],
 ) -> AccessTokenPayload:
     """Verify an access token with one key or a rotation key set."""
     if isinstance(key, tuple):
         return _verify_with_key_set(
             token=token,
-            jwt_issuer=jwt_issuer,
-            jwt_audience=jwt_audience,
+            issuer=issuer,
+            access_token_audience=access_token_audience,
             keys=key,
         )
     return _verify_with_key(
         token=token,
-        jwt_issuer=jwt_issuer,
-        jwt_audience=jwt_audience,
+        issuer=issuer,
+        access_token_audience=access_token_audience,
         key=key,
     )
 
@@ -48,8 +49,8 @@ def verify_access_token(
 def _verify_with_key(
     *,
     token: str,
-    jwt_issuer: str,
-    jwt_audience: str,
+    issuer: str,
+    access_token_audience: str,
     key: ed25519.Ed25519PublicKey | str,
 ) -> AccessTokenPayload:
     """Verify an access token with one trusted public key."""
@@ -63,9 +64,9 @@ def _verify_with_key(
         nbf={"essential": True},
         sub={"essential": True},
         organization={"essential": False},
-        aud={"essential": True, "value": jwt_audience},
+        aud={"essential": True, "value": access_token_audience},
         jti={"essential": True},
-        iss={"essential": True, "value": jwt_issuer},
+        iss={"essential": True, "value": issuer},
         principal_type={"essential": False},
     )
     try:
@@ -84,7 +85,7 @@ def _verify_with_key(
             ),
             audience=str(token_data.claims["aud"]),
             access_jti=str(token_data.claims["jti"]),
-            client_id=str(token_data.claims["client_id"]),
+            client_id=parse_uuid4(str(token_data.claims["client_id"])),
             scope=str(token_data.claims.get("scope", "")),
             principal_type=(
                 PrincipalType(str(token_data.claims["principal_type"]))
@@ -93,18 +94,24 @@ def _verify_with_key(
             ),
         )
     except JoseError as exc:
-        logger.warning("Access token rejected due to claim error: %s", str(exc))
+        logger.warning(
+            "Access token rejected due to a JOSE validation error.",
+            extra={"error_type": type(exc).__name__},
+        )
         raise OAuth2AccessTokenInvalidError from exc
     except (KeyError, TypeError, ValueError) as exc:
-        logger.warning("Access token decoding failed: %s", str(exc))
+        logger.warning(
+            "Access token decoding failed.",
+            extra={"error_type": type(exc).__name__},
+        )
         raise OAuth2AccessTokenInvalidError from exc
 
 
 def _verify_with_key_set(
     *,
     token: str,
-    jwt_issuer: str,
-    jwt_audience: str,
+    issuer: str,
+    access_token_audience: str,
     keys: tuple[OAuth2VerifyKey, ...],
 ) -> AccessTokenPayload:
     """Select a rotation key by ``kid`` and verify the access token."""
@@ -118,8 +125,8 @@ def _verify_with_key_set(
         try:
             return _verify_with_key(
                 token=token,
-                jwt_issuer=jwt_issuer,
-                jwt_audience=jwt_audience,
+                issuer=issuer,
+                access_token_audience=access_token_audience,
                 key=candidate.key,
             )
         except OAuth2AccessTokenInvalidError as exc:

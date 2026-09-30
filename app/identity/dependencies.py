@@ -4,15 +4,19 @@ from typing import Annotated
 
 from fastapi import Depends
 
-from app.browser_sessions.dependencies import CurrentBrowserUserContextDep
+from app.browser_sessions.dependencies import (
+    CurrentBrowserFormUserContextDep,
+    CurrentBrowserUserContextDep,
+)
 from app.db.dependencies import DbSessionDep, DbSessionFactoryDep
-from app.events.dependencies import EventPublisherDep
 from app.identity.services.lifecycle import UserLifecycleService
-from app.identity.services.operator import OperatorUsersService
-from app.identity.services.operator_organizations import OperatorOrganizationsService
-from app.identity.services.organization import OrganizationUsersService
 from app.identity.services.organization_metadata import OrganizationMetadataService
+from app.identity.services.organization_users import OrganizationUsersService
+from app.identity.services.registration import RegistrationService
 from app.identity.services.self import UserSelfService
+from app.identity.services.server_organizations import ServerOrganizationsService
+from app.identity.services.server_users import ServerUsersService
+from app.notifications.dependencies import NotificationPublisherDep
 from app.password.dependencies import PasswordHasherDep
 from app.security.authentication import CurrentUserContextDep
 from app.security.session_revocation_dependencies import SecuritySessionRevocationDep
@@ -20,7 +24,7 @@ from app.security.session_revocation_dependencies import SecuritySessionRevocati
 
 def get_user_lifecycle_service(
     db_session: DbSessionDep,
-    event_publisher: EventPublisherDep,
+    notification_publisher: NotificationPublisherDep,
     password_hasher: PasswordHasherDep,
     security_revocation: SecuritySessionRevocationDep,
     session_factory: DbSessionFactoryDep,
@@ -29,7 +33,7 @@ def get_user_lifecycle_service(
     return UserLifecycleService(
         db_session=db_session,
         password_hasher=password_hasher,
-        event_publisher=event_publisher,
+        notification_publisher=notification_publisher,
         security_revocation=security_revocation,
         session_factory=session_factory,
     )
@@ -38,6 +42,25 @@ def get_user_lifecycle_service(
 UserLifecycleServiceDep = Annotated[
     UserLifecycleService,
     Depends(get_user_lifecycle_service),
+]
+
+
+def get_registration_service(
+    db_session: DbSessionDep,
+    notification_publisher: NotificationPublisherDep,
+    password_hasher: PasswordHasherDep,
+) -> RegistrationService:
+    """Provide the canonical self-registration lifecycle."""
+    return RegistrationService(
+        db_session=db_session,
+        notification_publisher=notification_publisher,
+        password_hasher=password_hasher,
+    )
+
+
+RegistrationServiceDep = Annotated[
+    RegistrationService,
+    Depends(get_registration_service),
 ]
 
 
@@ -76,6 +99,25 @@ BrowserUserSelfServiceDep = Annotated[
 ]
 
 
+def get_browser_form_user_self_service(
+    db_session: DbSessionDep,
+    user_ctx: CurrentBrowserFormUserContextDep,
+    lifecycle: UserLifecycleServiceDep,
+) -> UserSelfService:
+    """Provide CSRF-validated self-service for a browser form mutation."""
+    return UserSelfService(
+        db_session=db_session,
+        user_ctx=user_ctx,
+        lifecycle=lifecycle,
+    )
+
+
+BrowserFormUserSelfServiceDep = Annotated[
+    UserSelfService,
+    Depends(get_browser_form_user_self_service),
+]
+
+
 def get_organization_users_service(
     db_session: DbSessionDep,
     user_ctx: CurrentUserContextDep,
@@ -84,7 +126,7 @@ def get_organization_users_service(
     """Provide organization-scoped identity administration."""
     return OrganizationUsersService(
         db_session=db_session,
-        user_ctx=user_ctx,
+        actor_ctx=user_ctx,
         lifecycle=lifecycle,
     )
 
@@ -100,7 +142,7 @@ def get_organization_metadata_service(
     user_ctx: CurrentUserContextDep,
 ) -> OrganizationMetadataService:
     """Provide organization-scoped metadata administration."""
-    return OrganizationMetadataService(db_session=db_session, user_ctx=user_ctx)
+    return OrganizationMetadataService(db_session=db_session, actor_ctx=user_ctx)
 
 
 OrganizationMetadataServiceDep = Annotated[
@@ -109,34 +151,34 @@ OrganizationMetadataServiceDep = Annotated[
 ]
 
 
-def get_operator_users_service(
+def get_server_users_service(
     db_session: DbSessionDep,
     user_ctx: CurrentUserContextDep,
     lifecycle: UserLifecycleServiceDep,
-) -> OperatorUsersService:
+) -> ServerUsersService:
     """Provide server-operator identity administration."""
-    return OperatorUsersService(
+    return ServerUsersService(
         db_session=db_session,
-        user_ctx=user_ctx,
+        actor_ctx=user_ctx,
         lifecycle=lifecycle,
     )
 
 
-OperatorUsersServiceDep = Annotated[
-    OperatorUsersService,
-    Depends(get_operator_users_service),
+ServerUsersServiceDep = Annotated[
+    ServerUsersService,
+    Depends(get_server_users_service),
 ]
 
 
-def get_operator_organizations_service(
+def get_server_organizations_service(
     db_session: DbSessionDep,
     user_ctx: CurrentUserContextDep,
-) -> OperatorOrganizationsService:
+) -> ServerOrganizationsService:
     """Provide server-operator organization administration."""
-    return OperatorOrganizationsService(db_session=db_session, user_ctx=user_ctx)
+    return ServerOrganizationsService(db_session=db_session, actor_ctx=user_ctx)
 
 
-OperatorOrganizationsServiceDep = Annotated[
-    OperatorOrganizationsService,
-    Depends(get_operator_organizations_service),
+ServerOrganizationsServiceDep = Annotated[
+    ServerOrganizationsService,
+    Depends(get_server_organizations_service),
 ]

@@ -2,11 +2,13 @@
 
 from fastapi import APIRouter, status
 
-from app.api.v1.auth.responses import AUTH_TOKEN_CONFIRMATION_ERROR_RESPONSES
-from app.api.v1.auth.schemas import EmailRequest, TokenConfirmRequest
-from app.auth_tokens.dependencies import AuthTokenConfirmationServiceDep
-from app.events.dependencies import AuthNotificationRequestServiceDep
+from app.api.v1.auth.openapi_responses import (
+    WORKFLOW_TOKEN_CONFIRMATION_ERROR_RESPONSES,
+)
+from app.api.v1.auth.schemas import EmailRequest, WorkflowTokenConfirmRequest
+from app.notifications.dependencies import AuthNotificationRequestServiceDep
 from app.openapi_tags import AUTHENTICATION_V1_TAG
+from app.workflow_tokens.dependencies import WorkflowTokenConfirmationServiceDep
 
 
 request_router = APIRouter(prefix="/email/verify", tags=[AUTHENTICATION_V1_TAG])
@@ -25,11 +27,11 @@ async def request_email_verification(
 @confirmation_router.post(
     "/confirm",
     status_code=status.HTTP_204_NO_CONTENT,
-    responses=AUTH_TOKEN_CONFIRMATION_ERROR_RESPONSES,
+    responses=WORKFLOW_TOKEN_CONFIRMATION_ERROR_RESPONSES,
 )
 async def confirm_email_verification(
-    payload: TokenConfirmRequest,
-    auth_token_confirmation_service: AuthTokenConfirmationServiceDep,
+    payload: WorkflowTokenConfirmRequest,
+    workflow_token_confirmation_service: WorkflowTokenConfirmationServiceDep,
 ) -> None:
     """Confirm an email verification token."""
-    await auth_token_confirmation_service.confirm_registered_email(payload.token)
+    await workflow_token_confirmation_service.confirm_registered_email(payload.token)

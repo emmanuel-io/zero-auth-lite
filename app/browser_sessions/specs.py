@@ -5,7 +5,7 @@ from typing import Final
 from app.core.specs import unpadded_urlsafe_base64_length
 
 
-class SessionSpecs:
+class BrowserSessionSpecs:
     """Browser-session token and metadata limits."""
 
     TOKEN_BYTES: Final[int] = 32

@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
 authors = [{ name = "Emmanuel Amadio" }]
+classifiers = ["Operating System :: POSIX"]
 dependencies = [
     "alembic>=1.19.1",
     "aiosqlite>=0.22.1",
@@ -115,7 +116,6 @@ unfixable = ["B", "SIM", "TRY", "RUF"]
 "app/settings/root.py" = ["S105"]
 "**/tests/**/test_*.py" = ["D202", "D205", "S101"]
 "tests/conftest.py" = ["FLY002", "S106"]
-"tests/support/auth.py" = ["S106"]
 "tests/**" = ["S101"]
 "scripts/**" = ["T201"]
 

@@ -11,12 +11,13 @@ from tests.fixtures.oauth2 import (
     add_oauth2_required_context_route,
     authorization_code_from_redirect,
     CODE_VERIFIER,
-    count_token_pairs,
+    count_token_states,
     create_other_public_client,
     create_public_authorization_code_client,
     login_browser_session,
     request_authorization_code,
 )
+from tests.identifiers import deterministic_uuid
 
 
 pytestmark = pytest.mark.api
@@ -24,7 +25,7 @@ pytestmark = pytest.mark.api
 
 @pytest.mark.asyncio
 @pytest.mark.system
-async def test_revoke_access_token_deletes_client_owned_token_pair(
+async def test_revoke_access_token_deletes_client_owned_token_state(
     app: FastAPI,
     client: httpx.AsyncClient,
     verified_user_credentials: UserCredentials,
@@ -43,7 +44,7 @@ async def test_revoke_access_token_deletes_client_owned_token_pair(
             "grant_type": "authorization_code",
             "code": authorization_code_from_redirect(authorize_response),
             "redirect_uri": "https://client.example/callback",
-            "client_id": "public-client",
+            "client_id": str(deterministic_uuid("public-client")),
             "code_verifier": CODE_VERIFIER,
         },
     )
@@ -54,7 +55,7 @@ async def test_revoke_access_token_deletes_client_owned_token_pair(
         data={
             "token": access_token,
             "token_type_hint": "access_token",
-            "client_id": "public-client",
+            "client_id": str(deterministic_uuid("public-client")),
         },
     )
     protected_response = await client.get(
@@ -67,7 +68,7 @@ async def test_revoke_access_token_deletes_client_owned_token_pair(
     assert revoke_response.status_code == status.HTTP_200_OK
     assert protected_response.status_code == status.HTTP_401_UNAUTHORIZED
     assert session_ended_at is not None
-    assert await count_token_pairs(app) == 0
+    assert await count_token_states(app) == 0
 
 
 @pytest.mark.asyncio
@@ -89,7 +90,7 @@ async def test_revoke_treats_token_type_hint_as_advisory(
             "grant_type": "authorization_code",
             "code": authorization_code_from_redirect(authorize_response),
             "redirect_uri": "https://client.example/callback",
-            "client_id": "public-client",
+            "client_id": str(deterministic_uuid("public-client")),
             "code_verifier": CODE_VERIFIER,
         },
     )
@@ -100,14 +101,14 @@ async def test_revoke_treats_token_type_hint_as_advisory(
         data={
             "token": refresh_token,
             "token_type_hint": "access_token",
-            "client_id": "public-client",
+            "client_id": str(deterministic_uuid("public-client")),
         },
     )
 
     assert revoke_response.status_code == status.HTTP_200_OK
     assert revoke_response.headers["Cache-Control"] == "no-store"
     assert revoke_response.headers["Pragma"] == "no-cache"
-    assert await count_token_pairs(app) == 0
+    assert await count_token_states(app) == 0
 
 
 @pytest.mark.asyncio
@@ -117,7 +118,7 @@ async def test_revoke_refresh_token_hint_deletes_client_owned_pair(
     client: httpx.AsyncClient,
     verified_user_credentials: UserCredentials,
 ) -> None:
-    """Assert refresh-token revocation hint deletes client-owned token pairs."""
+    """Assert refresh-token revocation hint deletes client-owned token states."""
     await create_public_authorization_code_client(app)
     login_response = await login_browser_session(client, verified_user_credentials)
     assert login_response.status_code == status.HTTP_204_NO_CONTENT
@@ -130,7 +131,7 @@ async def test_revoke_refresh_token_hint_deletes_client_owned_pair(
             "grant_type": "authorization_code",
             "code": authorization_code_from_redirect(authorize_response),
             "redirect_uri": "https://client.example/callback",
-            "client_id": "public-client",
+            "client_id": str(deterministic_uuid("public-client")),
             "code_verifier": CODE_VERIFIER,
         },
     )
@@ -142,12 +143,12 @@ async def test_revoke_refresh_token_hint_deletes_client_owned_pair(
         data={
             "token": refresh_token,
             "token_type_hint": "refresh_token",
-            "client_id": "public-client",
+            "client_id": str(deterministic_uuid("public-client")),
         },
     )
 
     assert revoke_response.status_code == status.HTTP_200_OK
-    assert await count_token_pairs(app) == 0
+    assert await count_token_states(app) == 0
 
 
 @pytest.mark.asyncio
@@ -172,7 +173,7 @@ async def test_revoke_ignores_token_owned_by_another_client(
             "grant_type": "authorization_code",
             "code": authorization_code_from_redirect(authorize_response),
             "redirect_uri": "https://client.example/callback",
-            "client_id": "public-client",
+            "client_id": str(deterministic_uuid("public-client")),
             "code_verifier": CODE_VERIFIER,
         },
     )
@@ -183,7 +184,7 @@ async def test_revoke_ignores_token_owned_by_another_client(
         data={
             "token": access_token,
             "token_type_hint": "access_token",
-            "client_id": "other-public-client",
+            "client_id": str(deterministic_uuid("other-public-client")),
         },
     )
     protected_response = await client.get(
@@ -193,4 +194,4 @@ async def test_revoke_ignores_token_owned_by_another_client(
 
     assert revoke_response.status_code == status.HTTP_200_OK
     assert protected_response.status_code == status.HTTP_200_OK
-    assert await count_token_pairs(app) == 1
+    assert await count_token_states(app) == 1

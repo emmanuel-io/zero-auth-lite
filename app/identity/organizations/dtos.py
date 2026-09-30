@@ -1,9 +1,10 @@
 """Organization service data transfer objects."""
 
+from uuid import UUID
+
 from pydantic import BaseModel, ConfigDict
 
 from app.identity.organizations.types import OrganizationName
-from app.public_ids import PublicId
 
 
 class _OrganizationBase(BaseModel):
@@ -23,7 +24,7 @@ class OrganizationReadDTO(_OrganizationBase):
 
     model_config = ConfigDict(from_attributes=True)
 
-    public_id: PublicId
+    public_id: UUID
 
 
 class OrganizationSelfReadDTO(_OrganizationBase):

@@ -7,7 +7,6 @@ from sqlalchemy import insert
 from sqlalchemy.exc import IntegrityError
 
 from app.db.models.oauth2_client import OAuth2ClientDB
-from app.identity.public_ids import format_user_id
 from app.oauth2.clients.credential_generation import (
     generate_oauth2_client_id,
     generate_oauth2_client_secret,
@@ -21,9 +20,13 @@ from app.oauth2.clients.dtos import (
 from app.oauth2.clients.management.authorization import require_operator
 from app.oauth2.clients.management.errors import OAuth2ClientConflictError
 from app.oauth2.clients.management.policy import OAuth2ClientPolicy
+from app.oauth2.clients.management.support import OAuth2ClientManagementSupport
+from app.oauth2.clients.management.user_organization_policy import (
+    validate_user_organization_policy,
+)
 from app.password.async_hashing import hash_password
 from app.password.protocols import PasswordHasherProtocol
-from app.security.dtos import UserPrincipalContext
+from app.security.principals import UserPrincipalContext
 
 
 if TYPE_CHECKING:
@@ -33,7 +36,7 @@ if TYPE_CHECKING:
 logger = getLogger(__name__)
 
 
-class OAuth2ClientRegistrationService:
+class OAuth2ClientRegistrationService(OAuth2ClientManagementSupport):
     """Register global OAuth2 clients and issue initial credentials."""
 
     def __init__(
@@ -44,7 +47,7 @@ class OAuth2ClientRegistrationService:
         password_hasher: PasswordHasherProtocol,
     ) -> None:
         """Initialize client registration dependencies."""
-        self.db_session = db_session
+        super().__init__(db_session=db_session)
         self.policy = policy
         self.password_hasher = password_hasher
 
@@ -62,16 +65,22 @@ class OAuth2ClientRegistrationService:
             is_confidential=dto.is_confidential,
             requires_consent=dto.requires_consent,
         )
+        validate_user_organization_policy(
+            mode=dto.user_organization_access,
+            organization_ids=dto.user_organization_ids,
+        )
         raw_secret = generate_oauth2_client_secret() if dto.is_confidential else None
+        hashed_secret = (
+            await hash_password(self.password_hasher, raw_secret)
+            if raw_secret
+            else None
+        )
+        organizations = await self._resolve_organizations(dto.user_organization_ids)
         try:
             data = OAuth2ClientPersistenceCreateDTO(
                 client_id=generate_oauth2_client_id(),
-                client_secret=(
-                    await hash_password(self.password_hasher, raw_secret)
-                    if raw_secret
-                    else None
-                ),
-                **dto.model_dump(),
+                client_secret=hashed_secret,
+                **dto.model_dump(exclude={"user_organization_ids"}),
             )
             row = (
                 await self.db_session.execute(
@@ -81,6 +90,10 @@ class OAuth2ClientRegistrationService:
                 )
             ).scalar_one()
             await self.db_session.flush()
+            await self._replace_user_organizations(
+                client_id=row.client_id,
+                organization_ids=[organization.id for organization in organizations],
+            )
             client = OAuth2ClientReadDTO.model_validate(row)
         except IntegrityError as exc:
             raise OAuth2ClientConflictError from exc
@@ -91,7 +104,7 @@ class OAuth2ClientRegistrationService:
                 "subject_id=%s confidential=%s active=%s grant_types=%s"
             ),
             client.client_id,
-            format_user_id(operator_ctx.user_public_id)
+            str(operator_ctx.user_public_id)
             if operator_ctx.user_public_id
             else "unknown",
             client.is_confidential,

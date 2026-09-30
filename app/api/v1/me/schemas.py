@@ -3,17 +3,46 @@
 from datetime import datetime
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from fastapi import Query
+from pydantic import BaseModel, ConfigDict, Field, model_validator, UUID4
 from pydantic.json_schema import SkipJsonSchema
 
-from app.api.schemas import reject_explicit_nulls
-from app.browser_sessions.public_ids import BROWSER_SESSION_ID_PATTERN
-from app.browser_sessions.specs import SessionSpecs
+from app.api.schemas import DEFAULT_PAGE_LIMIT_MAX, reject_explicit_nulls
+from app.browser_sessions.specs import BrowserSessionSpecs
 from app.identity.organizations.types import OrganizationName
-from app.identity.users.enums import OrganizationUserRole
+from app.identity.users.enums import OrganizationMembershipRole
 from app.identity.users.types import UserEmail, UserFirstName, UserLastName
-from app.oauth2.public_ids import OAUTH2_SESSION_ID_PATTERN
+from app.oauth2.grants.types import OAuth2SessionGrantType
 from app.password.validation import PasswordInput, StrongPassword
+
+
+class CurrentUserBrowserSessionListQuery(BaseModel):
+    """Query parameters for listing the current user's browser sessions."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    active_only: bool = True
+    offset: int = Field(default=0, ge=0, description="Number of sessions to skip.")
+    limit: int = Field(default=50, ge=1, le=DEFAULT_PAGE_LIMIT_MAX)
+
+
+CurrentUserBrowserSessionListQueryDep = Annotated[
+    CurrentUserBrowserSessionListQuery, Query()
+]
+
+
+class CurrentUserOAuth2SessionListQuery(BaseModel):
+    """Query parameters for listing the current user's OAuth2 sessions."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    offset: int = Field(default=0, ge=0, description="Number of sessions to skip.")
+    limit: int = Field(default=100, ge=1, le=DEFAULT_PAGE_LIMIT_MAX)
+
+
+CurrentUserOAuth2SessionListQueryDep = Annotated[
+    CurrentUserOAuth2SessionListQuery, Query()
+]
 
 
 class CurrentUserOrganizationResponse(BaseModel):
@@ -49,7 +78,7 @@ class CurrentUserProfileResponse(BaseModel):
     first_name: UserFirstName
     last_name: UserLastName
     is_active: bool
-    role: OrganizationUserRole
+    role: OrganizationMembershipRole
     email_verified: bool
     organization: Annotated[
         CurrentUserOrganizationResponse,
@@ -77,7 +106,7 @@ class CurrentUserPasswordChangeRequest(BaseModel):
 class CurrentUserBrowserSessionResponse(BaseModel):
     """Browser session metadata returned to its owning user."""
 
-    id: str = Field(pattern=BROWSER_SESSION_ID_PATTERN)
+    id: UUID4
     current: bool
     active: bool
     created_at: datetime
@@ -87,18 +116,18 @@ class CurrentUserBrowserSessionResponse(BaseModel):
     revoked_at: datetime | None = None
     revoked_reason: Annotated[
         str | None,
-        Field(max_length=SessionSpecs.REVOCATION_REASON_LENGTH_MAX),
+        Field(max_length=BrowserSessionSpecs.REVOCATION_REASON_LENGTH_MAX),
     ] = None
 
 
-class CurrentUserOAuth2AuthorizationResponse(BaseModel):
-    """One active OAuth2 client grant owned by the current user."""
+class CurrentUserOAuth2SessionResponse(BaseModel):
+    """One active OAuth2 session owned by the current user."""
 
-    id: str = Field(pattern=OAUTH2_SESSION_ID_PATTERN)
-    client_id: str
+    id: UUID4
+    client_id: UUID4
     client_name: str
     client_active: bool
-    grant_type: str
+    grant_type: OAuth2SessionGrantType
     scopes: list[str]
     created_at: datetime
     last_token_issued_at: datetime

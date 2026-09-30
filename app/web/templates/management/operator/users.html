@@ -1,0 +1,89 @@
+{% extends "management/fragment_base.html" if fragment else "management/base.html" %}
+{% block title %}Server users · Zero Auth Lite{% endblock %}
+{% block content %}
+  {% if not fragment %}
+    <header class="page-header">
+      <p class="eyebrow">Server operator</p>
+      <h1>Users</h1>
+      <p class="muted">{{ total }} matching users.</p>
+    </header>
+    <form class="toolbar" method="get" action="/management/operator/users" hx-get="/management/operator/users" hx-target="#operator-user-results" hx-push-url="true" hx-trigger="input changed delay:300ms, change">
+      <div>
+        <label for="q">Search</label>
+        <input id="q" name="q" value="{{ filters.q or '' }}" placeholder="Name or email">
+      </div>
+      <div>
+        <label for="organization-id">Organization ID</label>
+        <input id="organization-id" name="organization_id" value="{{ filters.organization_id or '' }}">
+      </div>
+      <div>
+        <label for="role">Role</label>
+        <select id="role" name="role">
+          <option value="">All</option>
+          <option value="member" {% if filters.role == 'member' %}selected{% endif %}>Member</option>
+          <option value="admin" {% if filters.role == 'admin' %}selected{% endif %}>Admin</option>
+        </select>
+      </div>
+      <div>
+        <label for="operator">Operator</label>
+        <select id="operator" name="operator">
+          <option value="">All</option>
+          <option value="true" {% if filters.operator is sameas true %}selected{% endif %}>Yes</option>
+          <option value="false" {% if filters.operator is sameas false %}selected{% endif %}>No</option>
+        </select>
+      </div>
+      <button class="button--secondary" type="submit">Filter</button>
+      <a class="button button--primary" href="/management/operator/users/new{% if filters.organization_id %}?organization_id={{ filters.organization_id }}{% endif %}">Invite user</a>
+    </form>
+  {% endif %}
+  <div id="operator-user-results">
+    {% if users %}
+      <div class="table-wrap" tabindex="0" role="region" aria-label="Users">
+        <table>
+          <thead>
+            <tr>
+              <th>User</th>
+              <th>Organization</th>
+              <th>Authority</th>
+              <th>State</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for user in users %}
+              <tr>
+                <td>
+                  <strong>{{ user.first_name }} {{ user.last_name }}</strong>
+                  <br>{{ user.email }}</td>
+                <td>{{ user.organization_id }}</td>
+                <td>{{ user.role }}{% if user.is_operator %} · operator{% endif %}
+                </td>
+                <td>
+                  {% if user.is_active %}Active{% else %}Inactive{% endif %} · {% if user.email_verified %}Verified{% else %}Unverified{% endif %}
+                </td>
+                <td>
+                  <a class="button button--secondary button--compact" href="/management/operator/users/{{ user.id }}">Manage</a>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="empty-state">
+        <p>No users match these filters.</p>
+      </div>
+    {% endif %}
+    <nav class="pagination" aria-label="Pagination">
+      {% if previous_url %}
+        <a href="{{ previous_url }}">Previous</a>
+      {% else %}
+        <span>
+        </span>
+      {% endif %}
+      {% if next_url %}
+        <a href="{{ next_url }}">Next</a>
+      {% endif %}
+    </nav>
+  </div>
+{% endblock %}

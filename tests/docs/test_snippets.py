@@ -9,7 +9,12 @@ from types import ModuleType
 import pytest
 from app.main import create_app
 from app.settings.root import Settings
-from app.web.settings import AuthenticationUIMode, UISettings
+from app.settings.ui import (
+    IdentityWorkflowUIMode,
+    ManagementAuthenticationMode,
+    OAuth2InteractionUIMode,
+    UISettings,
+)
 from fastapi import FastAPI
 
 
@@ -36,7 +41,7 @@ def test_minimal_composition_snippet_keeps_browser_authentication() -> None:
     paths = set(module.app.openapi()["paths"])
 
     assert isinstance(module.app, FastAPI)
-    assert module.settings.session.enabled is True
+    assert module.settings.browser_session.enabled is True
     assert "/register" in paths
     assert "/api/v1/organization/users" in paths
     assert "/login" in paths
@@ -50,8 +55,20 @@ def test_documented_protocol_routes_match_openapi() -> None:
     """The route reference stays aligned with the canonical server app."""
     settings = Settings(
         ui=UISettings(
-            authentication=AuthenticationUIMode.EXTERNAL,
-            external_login_url="https://frontend.test/login",
+            identity_workflow_mode=IdentityWorkflowUIMode.EXTERNAL,
+            management_authentication=ManagementAuthenticationMode.EXTERNAL,
+            oauth2_interaction=OAuth2InteractionUIMode.EXTERNAL,
+            urls={
+                "login": "https://frontend.test/login",
+                "logout": "https://frontend.test/logout",
+                "verification": "https://frontend.test/verify",
+                "password_reset": "https://frontend.test/reset",
+                "invitation": "https://frontend.test/invite",
+                "authorization_interaction": (
+                    "https://frontend.test/oauth2/interaction"
+                ),
+                "device_interaction": "https://frontend.test/oauth2/interaction",
+            },
         ),
     )
     paths = set(create_app(settings).openapi()["paths"])
@@ -66,6 +83,8 @@ def test_documented_protocol_routes_match_openapi() -> None:
         "/.well-known/openid-configuration",
         "/oauth2/jwks.json",
         "/oauth2/userinfo",
+        "/api/v1/oauth2/authorization-interactions/{transaction_id}",
+        "/api/v1/oauth2/device-interactions/{user_code}",
     } <= paths
 
 

@@ -1,11 +1,12 @@
 """Tests for canonical application error response shapes."""
 
 import json
-from typing import cast, ClassVar, TYPE_CHECKING
+from typing import cast, ClassVar, Literal, TYPE_CHECKING
 
 import pytest
-from app.browser_sessions.errors import SessionInvalidError
+from app.browser_sessions.errors import BrowserSessionInvalidError
 from app.core.errors.base import AppError
+from app.core.errors.common import UnauthorizedError
 from app.core.errors.handlers import (
     app_error_handler,
     http_error_handler,
@@ -13,7 +14,7 @@ from app.core.errors.handlers import (
     validation_error_handler,
 )
 from app.db.errors import DatabaseBusyError
-from app.errors import UnauthorizedError
+from app.oauth2.error_codes import OAuth2ErrorCode
 from app.oauth2.error_handler import oauth2_protocol_error_handler
 from app.oauth2.errors import InvalidClientError, OAuth2ProtocolError
 from app.settings.app import AppSettings
@@ -34,10 +35,10 @@ pytestmark = pytest.mark.unit
 
 
 class ExampleAppError(AppError):
-    """Example formatted application error."""
+    """Example application error."""
 
     code = "EXAMPLE"
-    message = "Example %s"
+    message = "Example detail"
     status = status.HTTP_409_CONFLICT
     headers: ClassVar[dict[str, str]] = {"WWW-Authenticate": "Bearer"}
 
@@ -48,7 +49,9 @@ class ExamplePayload(BaseModel):
     name: str
 
 
-def request(*, environment: str = "development") -> Request:
+def request(
+    *, environment: Literal["development", "deployment"] = "development"
+) -> Request:
     """Return a minimal request for handler invocation."""
     app = FastAPI()
     settings = Settings().model_copy(
@@ -70,21 +73,21 @@ def request(*, environment: str = "development") -> Request:
 @pytest.mark.asyncio
 async def test_custom_error_handler_serializes_domain_error_detail() -> None:
     """Assert domain errors expose a stable code and safe detail."""
-    response = await app_error_handler(request(), ExampleAppError("detail"))
+    response = await app_error_handler(request(), ExampleAppError())
 
     assert response.status_code == status.HTTP_409_CONFLICT
-    assert json.loads(response.body) == {
+    assert json.loads(bytes(response.body)) == {
         "code": "EXAMPLE",
         "message": "Example detail",
         "details": [],
     }
-    assert str(ExampleAppError("detail")) == "[EXAMPLE] Example detail"
+    assert str(ExampleAppError()) == "[EXAMPLE] Example detail"
 
 
 @pytest.mark.asyncio
 async def test_custom_error_handler_preserves_domain_error_headers() -> None:
     """Assert authentication metadata reaches HTTP clients."""
-    response = await app_error_handler(request(), ExampleAppError("detail"))
+    response = await app_error_handler(request(), ExampleAppError())
 
     assert response.headers["www-authenticate"] == "Bearer"
     response.headers["www-authenticate"] = "Changed"
@@ -102,7 +105,14 @@ def test_app_error_without_headers_uses_an_empty_mapping() -> None:
     [
         (AppError, {}),
         (UnauthorizedError, {"WWW-Authenticate": "Bearer"}),
-        (SessionInvalidError, {"WWW-Authenticate": "Session"}),
+        (
+            BrowserSessionInvalidError,
+            {
+                "WWW-Authenticate": "Session",
+                "Cache-Control": "no-store",
+                "Pragma": "no-cache",
+            },
+        ),
         (DatabaseBusyError, {"Retry-After": "1"}),
     ],
 )
@@ -211,17 +221,20 @@ async def test_validation_details_remain_available_in_deployment() -> None:
 
 
 @pytest.mark.asyncio
-async def test_unexpected_error_uses_the_safe_internal_error_shape() -> None:
+async def test_unexpected_error_uses_the_safe_internal_error_shape(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Keep unexpected exception details out of the client response."""
     error = RuntimeError("sensitive internal detail")
     response = await unexpected_error_handler(request(), error)
 
     assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
-    assert json.loads(response.body) == {
+    assert json.loads(bytes(response.body)) == {
         "code": "INTERNAL_ERROR",
         "message": "Internal server error.",
         "details": [],
     }
+    assert any(record.message == "unexpected_error" for record in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -230,14 +243,14 @@ async def test_oauth2_protocol_error_keeps_rfc_error_shape() -> None:
     response = await oauth2_protocol_error_handler(
         request(),
         OAuth2ProtocolError(
-            error="invalid_grant",
+            error=OAuth2ErrorCode.INVALID_GRANT,
             error_description="Authorization code expired",
             status_code=status.HTTP_400_BAD_REQUEST,
         ),
     )
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert json.loads(response.body) == {
+    assert json.loads(bytes(response.body)) == {
         "error": "invalid_grant",
         "error_description": "Authorization code expired",
     }
@@ -253,4 +266,4 @@ async def test_oauth2_protocol_error_keeps_dynamic_challenge_headers() -> None:
 
     assert response.status_code == status.HTTP_401_UNAUTHORIZED
     assert response.headers["www-authenticate"] == 'Basic realm="oauth2/token"'
-    assert json.loads(response.body) == {"error": "invalid_client"}
+    assert json.loads(bytes(response.body)) == {"error": "invalid_client"}

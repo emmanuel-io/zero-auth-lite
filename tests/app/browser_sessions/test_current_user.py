@@ -1,6 +1,7 @@
 """Tests for browser-session-backed current-user dependencies."""
 
 from datetime import datetime, timedelta, UTC
+from typing import cast
 
 import httpx
 import pytest
@@ -112,7 +113,10 @@ async def get_session_expiry(app: FastAPI) -> datetime:
 async def get_session_revocation_reason(app: FastAPI) -> str | None:
     """Return the only persisted browser session revocation reason."""
     async with app.state.core_session_factory() as db_session:
-        return await db_session.scalar(select(BrowserSessionDB.revoked_reason))
+        return cast(
+            "str | None",
+            await db_session.scalar(select(BrowserSessionDB.revoked_reason)),
+        )
 
 
 @pytest.mark.asyncio
@@ -158,7 +162,7 @@ async def test_optional_context_requires_csrf_when_session_cookie_exists(
     response = await client.post("/test/session/optional-context")
 
     assert response.status_code == status.HTTP_403_FORBIDDEN
-    assert response.json()["message"] == "CSRF header missing"
+    assert response.json()["message"] == "CSRF request source missing"
 
 
 @pytest.mark.asyncio
@@ -176,8 +180,8 @@ async def test_optional_context_returns_user_with_valid_session_and_csrf(
         "/test/session/optional-context",
         headers={
             "Origin": TEST_ORIGIN,
-            app.state.settings.session.csrf.header_name: login_response.headers[
-                app.state.settings.session.csrf.header_name
+            app.state.settings.browser_session.csrf.header_name: login_response.headers[
+                app.state.settings.browser_session.csrf.header_name
             ],
         },
     )
@@ -187,7 +191,17 @@ async def test_optional_context_returns_user_with_valid_session_and_csrf(
 
 
 @pytest.mark.asyncio
-@app_settings(session={"csrf": {"public_origin": "https://admin.example"}})
+@app_settings(
+    browser_session={"csrf": {"public_origin": "https://admin.example"}},
+    ui={
+        "urls": {
+            "verification": "https://admin.example/verify-email",
+            "password_reset": "https://admin.example/reset-password",
+            "invitation": "https://admin.example/accept-invite",
+            "device_interaction": "https://admin.example/oauth2/device/verify",
+        }
+    },
+)
 async def test_optional_context_accepts_configured_public_origin(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -202,8 +216,8 @@ async def test_optional_context_accepts_configured_public_origin(
         "/test/session/optional-context",
         headers={
             "Origin": "https://admin.example",
-            app.state.settings.session.csrf.header_name: login_response.headers[
-                app.state.settings.session.csrf.header_name
+            app.state.settings.browser_session.csrf.header_name: login_response.headers[
+                app.state.settings.browser_session.csrf.header_name
             ],
         },
     )
@@ -228,18 +242,18 @@ async def test_optional_context_rejects_untrusted_origin(
         "/test/session/optional-context",
         headers={
             "Origin": "https://attacker.example",
-            app.state.settings.session.csrf.header_name: login_response.headers[
-                app.state.settings.session.csrf.header_name
+            app.state.settings.browser_session.csrf.header_name: login_response.headers[
+                app.state.settings.browser_session.csrf.header_name
             ],
         },
     )
 
     assert response.status_code == status.HTTP_403_FORBIDDEN
-    assert response.json()["message"] == "CSRF cookie header mismatch"
+    assert response.json()["message"] == "CSRF request source untrusted"
 
 
 @pytest.mark.asyncio
-@app_settings(session={"csrf": {"header_name": "X-Zero-CSRF"}})
+@app_settings(browser_session={"csrf": {"header_name": "X-Zero-CSRF"}})
 async def test_optional_context_uses_configured_csrf_header_name(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -281,13 +295,13 @@ async def test_get_csrf_token_returns_current_session_token(
 
     assert response.status_code == status.HTTP_204_NO_CONTENT
     assert (
-        response.headers[app.state.settings.session.csrf.header_name]
-        == login_response.headers[app.state.settings.session.csrf.header_name]
+        response.headers[app.state.settings.browser_session.csrf.header_name]
+        == login_response.headers[app.state.settings.browser_session.csrf.header_name]
     )
 
 
 @pytest.mark.asyncio
-@app_settings(session={"csrf": {"expose_token": CSRFTokenExposure.COOKIE}})
+@app_settings(browser_session={"csrf": {"expose_token": CSRFTokenExposure.COOKIE}})
 async def test_login_can_expose_csrf_token_as_cookie(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -298,20 +312,22 @@ async def test_login_can_expose_csrf_token_as_cookie(
 
     assert response.status_code == status.HTTP_204_NO_CONTENT
     assert response.content == b""
-    assert app.state.settings.session.csrf.header_name not in response.headers
-    csrf_cookie = response.cookies.get(app.state.settings.session.csrf.cookie_name)
+    assert app.state.settings.browser_session.csrf.header_name not in response.headers
+    csrf_cookie = response.cookies.get(
+        app.state.settings.browser_session.csrf.cookie_name
+    )
     assert csrf_cookie
     set_cookie_headers = response.headers.get_list("set-cookie")
     csrf_cookie_header = next(
         header
         for header in set_cookie_headers
-        if header.startswith(f"{app.state.settings.session.csrf.cookie_name}=")
+        if header.startswith(f"{app.state.settings.browser_session.csrf.cookie_name}=")
     )
     assert "HttpOnly" not in csrf_cookie_header
 
 
 @pytest.mark.asyncio
-@app_settings(session={"csrf": {"pattern": CSRFPattern.DOUBLE_SUBMIT}})
+@app_settings(browser_session={"csrf": {"pattern": CSRFPattern.DOUBLE_SUBMIT}})
 async def test_double_submit_logout_accepts_matching_cookie_and_header(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -320,13 +336,13 @@ async def test_double_submit_logout_accepts_matching_cookie_and_header(
     """Assert double-submit CSRF logout validates cookie/header equality."""
     login_response = await login_test_user(client, verified_user_credentials)
     assert login_response.status_code == status.HTTP_204_NO_CONTENT
-    csrf = login_response.headers[app.state.settings.session.csrf.header_name]
+    csrf = login_response.headers[app.state.settings.browser_session.csrf.header_name]
 
     response = await client.post(
         "/api/v1/sessions/logout",
         headers={
             "Origin": TEST_ORIGIN,
-            app.state.settings.session.csrf.header_name: csrf,
+            app.state.settings.browser_session.csrf.header_name: csrf,
         },
     )
 
@@ -335,7 +351,7 @@ async def test_double_submit_logout_accepts_matching_cookie_and_header(
 
 
 @pytest.mark.asyncio
-@app_settings(session={"csrf": {"pattern": CSRFPattern.DOUBLE_SUBMIT}})
+@app_settings(browser_session={"csrf": {"pattern": CSRFPattern.DOUBLE_SUBMIT}})
 @pytest.mark.negative
 async def test_double_submit_logout_rejects_missing_csrf_cookie(
     app: FastAPI,
@@ -345,14 +361,14 @@ async def test_double_submit_logout_rejects_missing_csrf_cookie(
     """Assert double-submit logout requires the CSRF cookie."""
     login_response = await login_test_user(client, verified_user_credentials)
     assert login_response.status_code == status.HTTP_204_NO_CONTENT
-    client.cookies.delete(app.state.settings.session.csrf.cookie_name)
+    client.cookies.delete(app.state.settings.browser_session.csrf.cookie_name)
 
     response = await client.post(
         "/api/v1/sessions/logout",
         headers={
             "Origin": TEST_ORIGIN,
-            app.state.settings.session.csrf.header_name: login_response.headers[
-                app.state.settings.session.csrf.header_name
+            app.state.settings.browser_session.csrf.header_name: login_response.headers[
+                app.state.settings.browser_session.csrf.header_name
             ],
         },
     )
@@ -378,7 +394,7 @@ async def test_get_csrf_token_issues_pre_session_state_for_bearer_only_request(
         headers={"Authorization": f"Bearer {token_response.json()['access_token']}"},
     )
 
-    csrf_settings = app.state.settings.session.csrf
+    csrf_settings = app.state.settings.browser_session.csrf
     assert response.status_code == status.HTTP_204_NO_CONTENT
     assert (
         response.cookies[csrf_settings.cookie_name]
@@ -463,7 +479,7 @@ async def test_expired_session_precedes_csrf_failure(
         "/test/session/required-context",
         headers={
             "Origin": TEST_ORIGIN,
-            app.state.settings.session.csrf.header_name: "wrong-token",
+            app.state.settings.browser_session.csrf.header_name: "wrong-token",
         },
     )
 
@@ -472,7 +488,7 @@ async def test_expired_session_precedes_csrf_failure(
 
 
 @pytest.mark.asyncio
-@app_settings(session={"ttl_seconds": 300, "slide_seconds": 120})
+@app_settings(browser_session={"ttl_seconds": 300, "slide_seconds": 120})
 async def test_required_context_slides_session_near_expiry(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -494,7 +510,7 @@ async def test_required_context_slides_session_near_expiry(
 
 
 @pytest.mark.asyncio
-@app_settings(session={"ttl_seconds": 300, "slide_seconds": 120})
+@app_settings(browser_session={"ttl_seconds": 300, "slide_seconds": 120})
 async def test_required_context_keeps_session_expiry_outside_slide_window(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -514,7 +530,7 @@ async def test_required_context_keeps_session_expiry_outside_slide_window(
 
 
 @pytest.mark.asyncio
-@app_settings(session={"ttl_seconds": 300, "slide_seconds": 120})
+@app_settings(browser_session={"ttl_seconds": 300, "slide_seconds": 120})
 async def test_required_context_caps_cookie_at_sql_session_expiry(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -532,15 +548,15 @@ async def test_required_context_caps_cookie_at_sql_session_expiry(
     session_cookie_header = next(
         header
         for header in set_cookie_headers
-        if f"{app.state.settings.session.cookie_name}=" in header
+        if f"{app.state.settings.browser_session.cookie_name}=" in header
     )
     max_age = int(session_cookie_header.split("Max-Age=", 1)[1].split(";", 1)[0])
     assert response.status_code == status.HTTP_200_OK
-    assert 0 < max_age <= app.state.settings.session.ttl_seconds
+    assert 0 < max_age <= app.state.settings.browser_session.ttl_seconds
 
 
 @pytest.mark.asyncio
-@app_settings(session={"ttl_seconds": 300, "slide_seconds": 120})
+@app_settings(browser_session={"ttl_seconds": 300, "slide_seconds": 120})
 async def test_failed_request_does_not_refresh_rolled_back_session(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -558,7 +574,7 @@ async def test_failed_request_does_not_refresh_rolled_back_session(
     assert response.status_code == status.HTTP_409_CONFLICT
     assert await get_session_expiry(app) == expires_at
     assert not any(
-        header.startswith(f"{app.state.settings.session.cookie_name}=")
+        header.startswith(f"{app.state.settings.browser_session.cookie_name}=")
         for header in response.headers.get_list("set-cookie")
     )
 
@@ -579,8 +595,8 @@ async def test_logout_all_revokes_current_user_sessions(
         json={"scope": "all"},
         headers={
             "Origin": TEST_ORIGIN,
-            app.state.settings.session.csrf.header_name: login_response.headers[
-                app.state.settings.session.csrf.header_name
+            app.state.settings.browser_session.csrf.header_name: login_response.headers[
+                app.state.settings.browser_session.csrf.header_name
             ],
         },
     )
@@ -607,7 +623,7 @@ async def test_logout_clears_already_expired_session(
     response = await client.post("/api/v1/sessions/logout")
 
     assert response.status_code == status.HTTP_204_NO_CONTENT
-    assert response.cookies.get(app.state.settings.session.cookie_name) is None
+    assert response.cookies.get(app.state.settings.browser_session.cookie_name) is None
 
 
 @pytest.mark.asyncio
@@ -634,7 +650,7 @@ async def test_logout_rejects_missing_csrf_for_valid_session(
     response = await client.post("/api/v1/sessions/logout")
 
     assert response.status_code == status.HTTP_403_FORBIDDEN
-    assert response.json()["message"] == "CSRF header missing"
+    assert response.json()["message"] == "CSRF request source missing"
 
 
 @pytest.mark.asyncio

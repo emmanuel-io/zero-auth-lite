@@ -4,9 +4,11 @@ Alembic migrations are the explicit history of the canonical server schema.
 The application does not create or modify tables at startup, so every ORM
 schema change must have a reviewed migration before it can be used.
 
-The current checkout starts from one canonical initial migration. Development
-databases created from an earlier schema are disposable and must be recreated;
-there is intentionally no data-upgrade path for unpublished schemas.
+The migration history starts from one canonical initial revision and then
+applies each reviewed revision in order. Alembic upgrades databases whose
+current revision belongs to that history. Development databases created from
+schemas that are not represented in the migration history are disposable and
+must be recreated.
 
 ## Generate a Migration
 
@@ -20,16 +22,16 @@ the revision:
 ```bash
 migration_dir="$(mktemp -d)"
 export ZA_DB_PATH="$migration_dir/zero-auth-lite.db"
+revision_id="YYYYMMDD_NNNN" # Replace with the next available identifier.
 uv run alembic upgrade head
 uv run alembic revision --autogenerate \
-  --rev-id 20260817_0002 \
+  --rev-id "$revision_id" \
   -m "describe the schema change"
 ```
 
-Replace the example revision identifier with the next identifier in the
-`YYYYMMDD_NNNN` sequence used by `alembic/versions/`. Keep the generated file
-in that directory and confirm that its `down_revision` points to the current
-head.
+Set `revision_id` to the next available `<YYYYMMDD_NNNN>` identifier in the
+sequence used by `alembic/versions/`. Keep the generated file in that directory
+and confirm that its `down_revision` points to the current head.
 
 Do not run autogeneration against an empty or outdated database. Alembic would
 then describe existing schema history as if it were part of the new change.

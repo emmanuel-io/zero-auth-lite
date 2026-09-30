@@ -18,11 +18,11 @@ async def test_notification_request_adapters_delegate_requests() -> None:
 
     await request_email_verification(
         payload=EmailRequest(email="user@example.com"),
-        notification_requests=notification_requests,  # type: ignore[arg-type]
+        notification_requests=notification_requests,  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
     )
     await forgot_password(
         payload=EmailRequest(email="user@example.com"),
-        notification_requests=notification_requests,  # type: ignore[arg-type]
+        notification_requests=notification_requests,  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
     )
 
     assert notification_requests.verification_emails == ["user@example.com"]

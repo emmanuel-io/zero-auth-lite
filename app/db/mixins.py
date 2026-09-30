@@ -1,27 +1,25 @@
 """Database model mixins for common patterns."""
 
 from datetime import datetime
+from uuid import UUID, uuid4
 
 from sqlalchemy import (
-    BigInteger,
     DateTime,
     func,
+    Uuid,
 )
 from sqlalchemy.orm import Mapped, mapped_column
-
-from app.db.snowflake import generate_snowflake_id
-from app.public_ids import PublicId
 
 
 class PublicIdMixin:
     """Adds a public identifier exposed through the API."""
 
-    public_id: Mapped[PublicId] = mapped_column(
-        BigInteger,
+    public_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
         unique=True,
         index=True,
         nullable=False,
-        default=generate_snowflake_id,
+        default=uuid4,
     )
 
 

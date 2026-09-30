@@ -1,0 +1,91 @@
+{% extends "management/base.html" %}
+{% block title %}Organization OAuth2 sessions · Zero Auth Lite{% endblock %}
+{% block content %}
+  <header class="page-header">
+    <p class="eyebrow">Organization administration</p>
+    <h1>OAuth2 sessions</h1>
+    <p class="muted">{{ total }} retained token families.</p>
+  </header>
+  <form class="toolbar" method="get">
+    <div>
+      <label for="client-id">Client ID</label>
+      <input id="client-id" name="client_id" value="{{ filters.client_id or '' }}">
+    </div>
+    <div>
+      <label for="user-id">User ID</label>
+      <input id="user-id" name="user_id" value="{{ filters.user_id or '' }}">
+    </div>
+    <div>
+      <label for="grant-type">Grant type</label>
+      <select id="grant-type" name="grant_type">
+        <option value="">All</option>
+        {% for grant in ['authorization_code', 'refresh_token', 'client_credentials', 'urn:ietf:params:oauth:grant-type:device_code'] %}
+          <option value="{{ grant }}" {% if filters.grant_type == grant %}selected{% endif %}>{{ grant }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <label class="checkbox">
+      <input type="checkbox" name="active_only" value="true" {% if filters.active_only %}checked{% endif %}> Active only</label>
+    <button class="button button--secondary" type="submit">Filter</button>
+  </form>
+  {% if sessions %}
+    <div class="table-wrap" tabindex="0" role="region" aria-label="Organization OAuth2 sessions">
+      <table>
+        <thead>
+          <tr>
+            <th>Client</th>
+            <th>Grant</th>
+            <th>User</th>
+            <th>State</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for session in sessions %}
+            <tr>
+              <td>{{ session.client_id }}<br>
+                <small>{{ session.id }}</small>
+              </td>
+              <td>{{ session.grant_type }}<br>
+                <small>{{ session.scopes|join(' ') }}</small>
+              </td>
+              <td>{{ session.user_id or 'Machine' }}</td>
+              <td>
+                {% if session.active %}Active{% else %}Expired{% endif %}
+              </td>
+              <td>
+                <form method="post" action="/management/organization/oauth2/sessions/{{ session.id }}/revoke">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <label class="checkbox">
+                    <input type="checkbox" name="confirm" value="true" required> Confirm one session</label>
+                  <button class="button button--danger button--compact" type="submit">Revoke session</button>
+                </form>
+                <form method="post" action="/management/organization/oauth2/clients/{{ session.client_id }}/revoke">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <label class="checkbox">
+                    <input type="checkbox" name="confirm" value="true" required> Confirm all client sessions</label>
+                  <button class="button button--danger button--compact" type="submit">Revoke client</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="empty-state">
+      <p>No retained OAuth2 sessions match these filters.</p>
+    </div>
+  {% endif %}
+  <nav class="pagination" aria-label="Pagination">
+    {% if previous_url %}
+      <a href="{{ previous_url }}">Previous</a>
+    {% else %}
+      <span>
+      </span>
+    {% endif %}
+    {% if next_url %}
+      <a href="{{ next_url }}">Next</a>
+    {% endif %}
+  </nav>
+{% endblock %}

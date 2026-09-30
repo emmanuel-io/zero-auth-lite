@@ -2,7 +2,7 @@
 
 from enum import StrEnum
 
-from app.enums import Role
+from app.security.roles import Role
 
 
 class Permission(StrEnum):
@@ -16,6 +16,7 @@ class Permission(StrEnum):
     ORGANIZATIONS_WRITE = "organizations:write"
     USERS_READ = "users:read"
     USERS_WRITE = "users:write"
+    SESSIONS_WRITE = "sessions:write"
     OAUTH2_CLIENTS_READ = "oauth2_clients:read"
     OAUTH2_CLIENTS_WRITE = "oauth2_clients:write"
 
@@ -42,6 +43,7 @@ OPERATOR_PERMISSIONS = frozenset(
         Permission.ORGANIZATIONS_WRITE,
         Permission.USERS_READ,
         Permission.USERS_WRITE,
+        Permission.SESSIONS_WRITE,
         Permission.OAUTH2_CLIENTS_READ,
         Permission.OAUTH2_CLIENTS_WRITE,
     }
@@ -56,20 +58,13 @@ PERMISSION_DESCRIPTIONS: dict[Permission, str] = {
     Permission.ORGANIZATION_WRITE: (
         "Change resources in the current organization administration API."
     ),
-    Permission.ORGANIZATIONS_READ: (
-        "Read organizations through the server-operator API."
-    ),
-    Permission.ORGANIZATIONS_WRITE: (
-        "Change organizations through the server-operator API."
-    ),
-    Permission.USERS_READ: "Read users through the server-operator API.",
-    Permission.USERS_WRITE: "Change users through the server-operator API.",
-    Permission.OAUTH2_CLIENTS_READ: (
-        "Read OAuth2 clients through the server-operator API."
-    ),
-    Permission.OAUTH2_CLIENTS_WRITE: (
-        "Change OAuth2 clients through the server-operator API."
-    ),
+    Permission.ORGANIZATIONS_READ: ("Read organizations through the server API."),
+    Permission.ORGANIZATIONS_WRITE: ("Change organizations through the server API."),
+    Permission.USERS_READ: "Read users through the server API.",
+    Permission.USERS_WRITE: "Change users through the server API.",
+    Permission.SESSIONS_WRITE: ("Revoke sessions through the server API."),
+    Permission.OAUTH2_CLIENTS_READ: ("Read OAuth2 clients through the server API."),
+    Permission.OAUTH2_CLIENTS_WRITE: ("Change OAuth2 clients through the server API."),
 }
 
 

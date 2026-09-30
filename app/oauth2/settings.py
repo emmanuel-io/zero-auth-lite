@@ -3,7 +3,6 @@
 import base64
 import binascii
 from datetime import timedelta
-from enum import StrEnum
 from typing import Self
 from urllib.parse import urlsplit
 
@@ -18,6 +17,7 @@ from pydantic import (
     SecretStr,
 )
 
+from app.oauth2.grants.types import OAuth2GrantType
 from app.oauth2.specs import OAuth2Specs
 from app.settings.defaults import (
     DEV_OAUTH2_PRIVATE_KEY_B64,
@@ -30,16 +30,7 @@ DEFAULT_AUTHORIZATION_CODE_HASH_SECRET = (
     "dev-auth-code-hash-secret-for-local-server-example"  # noqa: S105
 )
 DEFAULT_TOKEN_HASH_SECRET = "dev-oauth2-token-hash-secret-for-local-server-example"  # noqa: S105
-DEFAULT_JWT_AUDIENCE = "zero-auth-lite-example-api"
-
-
-class OAuth2GrantType(StrEnum):
-    """Supported OAuth2 grant types."""
-
-    authorization_code = "authorization_code"
-    refresh_token = "refresh_token"  # noqa: S105
-    client_credentials = "client_credentials"
-    device_code = "urn:ietf:params:oauth:grant-type:device_code"
+DEFAULT_ACCESS_TOKEN_AUDIENCE = "zero-auth-lite-example-api"  # noqa: S105
 
 
 class OAuth2PreviousPublicKeySettings(BaseModel):
@@ -48,7 +39,7 @@ class OAuth2PreviousPublicKeySettings(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     kid: str = Field(min_length=1, max_length=OAuth2Specs.KEY_ID_LENGTH_MAX)
-    pub_key_b64: str
+    signing_public_key_b64: str
 
 
 class OAuth2Settings(BaseModel):
@@ -62,8 +53,8 @@ class OAuth2Settings(BaseModel):
     refresh_token_enabled: bool = True
     client_credentials_enabled: bool = True
     device_code_enabled: bool = True
-    prv_key_b64: str | None = DEV_OAUTH2_PRIVATE_KEY_B64
-    pub_key_b64: str | None = DEV_OAUTH2_PUBLIC_KEY_B64
+    signing_private_key_b64: SecretStr | None = SecretStr(DEV_OAUTH2_PRIVATE_KEY_B64)
+    signing_public_key_b64: str | None = DEV_OAUTH2_PUBLIC_KEY_B64
     authorization_code_hash_secret: SecretStr = Field(
         default=SecretStr(DEFAULT_AUTHORIZATION_CODE_HASH_SECRET),
         min_length=32,
@@ -80,9 +71,9 @@ class OAuth2Settings(BaseModel):
     device_code_interval_seconds: int = Field(default=5, gt=0)
     device_code_create_attempts: int = Field(default=5, ge=1, le=20)
     allow_client_secret_post: bool = True
-    jwt_issuer: str = LOCAL_AUTH_ORIGIN
-    jwt_audience: str = DEFAULT_JWT_AUDIENCE
-    jwt_key_id: str | None = "local-dev-key"
+    issuer: str = LOCAL_AUTH_ORIGIN
+    access_token_audience: str = DEFAULT_ACCESS_TOKEN_AUDIENCE
+    signing_key_id: str | None = "local-dev-key"
     jwks_enabled: bool = True
     oidc_enabled: bool = True
     previous_public_keys: tuple[OAuth2PreviousPublicKeySettings, ...] = ()
@@ -95,44 +86,50 @@ class OAuth2Settings(BaseModel):
             refresh_token_enabled=False,
             client_credentials_enabled=False,
             device_code_enabled=False,
-            prv_key_b64=None,
-            pub_key_b64=None,
-            jwt_key_id=None,
+            signing_private_key_b64=None,
+            signing_public_key_b64=None,
+            signing_key_id=None,
             jwks_enabled=False,
             oidc_enabled=False,
         )
 
     @model_validator(mode="after")
-    def validate_oidc_grant_policy(self) -> "OAuth2Settings":
-        """Ensure OIDC is not enabled without authorization-code support."""
+    def validate_grant_policy(self) -> "OAuth2Settings":
+        """Ensure dependent protocol features have an originating grant."""
         if self.oidc_enabled and not self.is_grant_enabled(
-            OAuth2GrantType.authorization_code
+            OAuth2GrantType.AUTHORIZATION_CODE
         ):
             msg = "oidc_enabled requires authorization_code_enabled"
             raise ValueError(msg)
+        if self.refresh_token_enabled and not self.has_refresh_token_originating_grant:
+            msg = (
+                "refresh_token_enabled requires authorization_code_enabled "
+                "or device_code_enabled"
+            )
+            raise ValueError(msg)
         try:
-            AnyHttpUrl(self.jwt_issuer)
+            AnyHttpUrl(self.issuer)
         except ValueError as exc:
-            msg = "jwt_issuer must be an absolute HTTP(S) URL"
+            msg = "issuer must be an absolute HTTP(S) URL"
             raise ValueError(msg) from exc
-        issuer = urlsplit(self.jwt_issuer)
+        issuer = urlsplit(self.issuer)
         if issuer.scheme not in {"http", "https"} or issuer.hostname is None:
-            msg = "jwt_issuer must be an absolute HTTP(S) URL with a hostname"
+            msg = "issuer must be an absolute HTTP(S) URL with a hostname"
             raise ValueError(msg)
         if issuer.username is not None or issuer.password is not None:
-            msg = "jwt_issuer must not contain user information"
+            msg = "issuer must not contain user information"
             raise ValueError(msg)
         if issuer.query or issuer.fragment:
-            msg = "jwt_issuer must not contain a query string or fragment"
+            msg = "issuer must not contain a query string or fragment"
             raise ValueError(msg)
         if self.oidc_enabled and not self.jwks_enabled:
             msg = "oidc_enabled requires jwks_enabled"
             raise ValueError(msg)
-        if (self.oidc_enabled or self.jwks_enabled) and not self.jwt_key_id:
-            msg = "OIDC and JWKS publication require jwt_key_id"
+        if (self.oidc_enabled or self.jwks_enabled) and not self.signing_key_id:
+            msg = "OIDC and JWKS publication require signing_key_id"
             raise ValueError(msg)
         previous_key_ids = [item.kid for item in self.previous_public_keys]
-        all_key_ids = [self.jwt_key_id, *previous_key_ids]
+        all_key_ids = [self.signing_key_id, *previous_key_ids]
         configured_key_ids = [item for item in all_key_ids if item is not None]
         if len(configured_key_ids) != len(set(configured_key_ids)):
             msg = "OAuth2 signing key identifiers must be unique"
@@ -146,10 +143,10 @@ class OAuth2Settings(BaseModel):
         except ValueError:
             return False
         explicit_grants = {
-            OAuth2GrantType.authorization_code: self.authorization_code_enabled,
-            OAuth2GrantType.refresh_token: self.refresh_token_enabled,
-            OAuth2GrantType.client_credentials: self.client_credentials_enabled,
-            OAuth2GrantType.device_code: self.device_code_enabled,
+            OAuth2GrantType.AUTHORIZATION_CODE: self.authorization_code_enabled,
+            OAuth2GrantType.REFRESH_TOKEN: self.refresh_token_enabled,
+            OAuth2GrantType.CLIENT_CREDENTIALS: self.client_credentials_enabled,
+            OAuth2GrantType.DEVICE_CODE: self.device_code_enabled,
         }
         return explicit_grants[normalized]
 
@@ -165,6 +162,11 @@ class OAuth2Settings(BaseModel):
     def has_enabled_grants(self) -> bool:
         """Return whether at least one token grant is enabled."""
         return bool(self.enabled_grants())
+
+    @property
+    def has_refresh_token_originating_grant(self) -> bool:
+        """Return whether a user grant can originate a refresh-token family."""
+        return self.authorization_code_enabled or self.device_code_enabled
 
     @property
     def protocol_enabled(self) -> bool:
@@ -189,19 +191,23 @@ class OAuth2Settings(BaseModel):
         verification_required = signing_required or self.jwks_enabled
         if not verification_required:
             return
-        if signing_required and self.prv_key_b64 is None:
-            msg = "Enabled OAuth2 grants require prv_key_b64"
+        if signing_required and self.signing_private_key_b64 is None:
+            msg = "Enabled OAuth2 grants require signing_private_key_b64"
             raise ValueError(msg)
-        if self.pub_key_b64 is None:
-            msg = "Enabled OAuth2 token verification requires pub_key_b64"
+        if self.signing_public_key_b64 is None:
+            msg = "Enabled OAuth2 token verification requires signing_public_key_b64"
             raise ValueError(msg)
-        if self.jwt_key_id is None:
-            msg = "Enabled OAuth2 token signing and verification require jwt_key_id"
+        if self.signing_key_id is None:
+            msg = "Enabled OAuth2 token signing and verification require signing_key_id"
             raise ValueError(msg)
 
-        public_key = self._load_public_key(self.pub_key_b64, name="pub_key_b64")
-        if self.prv_key_b64 is not None:
-            private_key = self._load_private_key(self.prv_key_b64)
+        public_key = self._load_public_key(
+            self.signing_public_key_b64, name="signing_public_key_b64"
+        )
+        if self.signing_private_key_b64 is not None:
+            private_key = self._load_private_key(
+                self.signing_private_key_b64.get_secret_value()
+            )
             derived_public_bytes = private_key.public_key().public_bytes(
                 encoding=serialization.Encoding.Raw,
                 format=serialization.PublicFormat.Raw,
@@ -211,13 +217,16 @@ class OAuth2Settings(BaseModel):
                 format=serialization.PublicFormat.Raw,
             )
             if derived_public_bytes != configured_public_bytes:
-                msg = "OAuth2 prv_key_b64 and pub_key_b64 do not form a key pair"
+                msg = (
+                    "OAuth2 signing_private_key_b64 and signing_public_key_b64 "
+                    "do not form a key pair"
+                )
                 raise ValueError(msg)
 
         if self.previous_public_keys:
             for previous_key in self.previous_public_keys:
                 self._load_public_key(
-                    previous_key.pub_key_b64,
+                    previous_key.signing_public_key_b64,
                     name=f"previous_public_keys[{previous_key.kid}]",
                 )
 
@@ -233,11 +242,13 @@ class OAuth2Settings(BaseModel):
     @classmethod
     def _load_private_key(cls, value: str) -> ed25519.Ed25519PrivateKey:
         """Load and validate the configured raw Ed25519 private key."""
-        raw_key = cls._decode_key(value, name="prv_key_b64")
+        raw_key = cls._decode_key(value, name="signing_private_key_b64")
         try:
             return ed25519.Ed25519PrivateKey.from_private_bytes(raw_key)
         except ValueError as exc:
-            msg = "prv_key_b64 must contain a raw 32-byte Ed25519 private key"
+            msg = (
+                "signing_private_key_b64 must contain a raw 32-byte Ed25519 private key"
+            )
             raise ValueError(msg) from exc
 
     @classmethod
@@ -257,9 +268,5 @@ class OAuth2Settings(BaseModel):
 
     @property
     def authorization_code_ttl_delta(self) -> timedelta:
-        """Return authorization code TTL as a timedelta.
-
-        Returns:
-            timedelta: Authorization code time-to-live.
-        """
+        """Return the authorization-code lifetime as a timedelta."""
         return timedelta(seconds=self.authorization_code_ttl_seconds)

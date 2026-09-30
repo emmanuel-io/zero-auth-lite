@@ -5,13 +5,11 @@ from datetime import datetime, UTC
 
 import httpx
 import pytest
-from app.api.dependencies.ids import format_user_id
-from app.db.models.auth_event import AuthEventOutboxDB
+from app.db.models.notification_outbox import NotificationOutboxDB
 from app.db.models.organization import OrganizationDB
 from app.db.models.organization_membership import OrganizationMembershipDB
 from app.db.models.user import UserDB, UserEmailDB
-from app.identity.users.enums import OrganizationUserRole, UserEmailStatus
-from app.public_ids import PUBLIC_ID_PAYLOAD_PATTERN
+from app.identity.users.enums import OrganizationMembershipRole, UserEmailStatus
 from app.security.permissions import Permission
 from fastapi import FastAPI, status
 from sqlalchemy import func, select, update
@@ -21,6 +19,10 @@ from tests.fixtures.auth import (
     issue_user_token,
     UserCredentials,
 )
+from tests.identifiers import (
+    format_public_id as format_user_id,
+    UUID4_PATTERN,
+)
 from tests.routes.api.helpers import login_headers
 
 
@@ -28,6 +30,33 @@ pytestmark = pytest.mark.api
 
 USERS_PATH = "/api/v1/organization/users"
 EXPECTED_INVITATION_EVENT_COUNT = 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.negative
+@pytest.mark.parametrize("field", ["first_name", "last_name"])
+async def test_invitation_rejects_unsafe_names_before_outbox(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    verified_user_credentials: UserCredentials,
+    field: str,
+) -> None:
+    """Reject unsafe invitee names before publishing an invitation event."""
+    headers = await login_headers(client, verified_user_credentials)
+    async with app.state.core_session_factory() as db_session:
+        before = await db_session.scalar(select(func.count(NotificationOutboxDB.id)))
+
+    response = await client.post(
+        USERS_PATH,
+        json={"email": "unsafe-invite@example.com", field: "Header\nInjection"},
+        headers=headers,
+    )
+
+    async with app.state.core_session_factory() as db_session:
+        after = await db_session.scalar(select(func.count(NotificationOutboxDB.id)))
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert after == before
 
 
 @pytest.mark.asyncio
@@ -49,7 +78,7 @@ async def test_organization_admin_can_manage_user_lifecycle(
     )
     assert create_response.status_code == status.HTTP_201_CREATED
     user_id = create_response.json()["id"]
-    assert re.fullmatch(rf"usr_{PUBLIC_ID_PAYLOAD_PATTERN}", user_id)
+    assert re.fullmatch(UUID4_PATTERN, user_id)
 
     list_response = await client.get(
         USERS_PATH,
@@ -118,8 +147,8 @@ async def test_organization_admin_can_resend_user_invitation(
     async with app.state.core_session_factory() as db_session:
         event_count = await db_session.scalar(
             select(func.count())
-            .select_from(AuthEventOutboxDB)
-            .where(AuthEventOutboxDB.event_type == "auth.invite_created")
+            .select_from(NotificationOutboxDB)
+            .where(NotificationOutboxDB.event_type == "auth.invite_created")
         )
 
     assert response.status_code == status.HTTP_204_NO_CONTENT
@@ -219,12 +248,12 @@ async def test_organization_invitation_resend_hides_other_organization_user(
     """Return not found when an invitation target belongs to another organization."""
     headers = await login_headers(client, verified_user_credentials)
     organization_response = await client.post(
-        "/api/v1/admin/organizations",
+        "/api/v1/server/organizations",
         json={"name": "Other Invitation Organization"},
         headers=headers,
     )
     create_response = await client.post(
-        "/api/v1/admin/users",
+        "/api/v1/server/users",
         json={
             "organization_id": organization_response.json()["id"],
             "email": "other-organization-reinvite@example.com",
@@ -269,6 +298,20 @@ async def test_organization_user_list_rejects_inverted_created_range(
 
 
 @pytest.mark.asyncio
+async def test_organization_user_list_accepts_largest_created_to(
+    client: httpx.AsyncClient,
+    verified_user_credentials: UserCredentials,
+) -> None:
+    """Treat the largest calendar date as an unbounded upper limit."""
+    await login_headers(client, verified_user_credentials)
+
+    response = await client.get(USERS_PATH, params={"created_to": "9999-12-31"})
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()["total"] >= 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.negative
 @pytest.mark.parametrize("is_operator", [False, True])
 async def test_organization_user_routes_require_explicit_organization_admin_role(
@@ -291,7 +334,7 @@ async def test_organization_user_routes_require_explicit_organization_admin_role
                 )
                 .scalar_subquery()
             )
-            .values(role=OrganizationUserRole.MEMBER)
+            .values(role=OrganizationMembershipRole.MEMBER)
         )
         await db_session.execute(
             update(UserDB)
@@ -486,7 +529,7 @@ async def test_organization_user_route_hides_other_organization_user(
                 OrganizationMembershipDB(
                     user_id=other_user.id,
                     organization_id=other_organization.id,
-                    role=OrganizationUserRole.MEMBER,
+                    role=OrganizationMembershipRole.MEMBER,
                 ),
             ]
         )
@@ -513,5 +556,19 @@ async def test_organization_user_path_rejects_invalid_public_id(
     await login_headers(client, verified_user_credentials)
 
     response = await client.get(f"{USERS_PATH}/{user_id}")
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+
+
+@pytest.mark.asyncio
+@pytest.mark.negative
+async def test_organization_user_list_rejects_oversized_search_query(
+    client: httpx.AsyncClient,
+    verified_user_credentials: UserCredentials,
+) -> None:
+    """Reject oversized organization user searches at the HTTP boundary."""
+    await login_headers(client, verified_user_credentials)
+
+    response = await client.get(USERS_PATH, params={"q": "x" * 257})
 
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT

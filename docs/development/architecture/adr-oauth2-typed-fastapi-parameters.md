@@ -93,6 +93,19 @@ as:
 
 Raw parsing must not replace the canonical typed parameter contract.
 
+### Repeated Protocol Parameters
+
+FastAPI's scalar `Query` and `Form` extraction selects one value when a name is
+repeated. OAuth2 requests instead require each parameter name to occur at most
+once so different parsers cannot make different security decisions. A shared
+route dependency therefore inspects query and cached form multi-items before
+client authentication or typed extraction completes and returns
+`invalid_request` when any name is repeated, including an unknown parameter.
+
+This check reads only parameter names and multiplicity. Typed `Query` and `Form`
+parameters remain responsible for extraction, constraints, OpenAPI, and the
+values passed to domain validation.
+
 ### Empty Client-Credential Presence
 
 FastAPI's typed extraction for an optional form string presents both a missing

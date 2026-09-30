@@ -24,6 +24,12 @@ The token endpoint uses `invalid_client`, `invalid_grant`,
 appropriate. Device polling additionally uses `authorization_pending`,
 `slow_down`, `access_denied`, and `expired_token`.
 
+Unexpected failures on protocol routes return `500 server_error` without
+exposing internal exception details. Temporary SQLite writer contention returns
+`503 temporarily_unavailable` and includes `Retry-After` so clients can retry
+later. Both responses retain the OAuth2 `{"error": ...}` shape rather than the
+application error envelope.
+
 Missing or invalid UserInfo bearer tokens return `invalid_token` with a
 `WWW-Authenticate: Bearer` challenge. A token without `openid` returns
 `insufficient_scope` and identifies the required scope.

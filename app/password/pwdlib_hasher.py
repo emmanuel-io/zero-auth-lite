@@ -33,3 +33,13 @@ class PwdlibPasswordHasher:
         except PwdlibError as exc:
             logger.exception("Password verification failed")
             raise PasswordHasherError from exc
+
+    def verify_and_update(
+        self, *, password: str, password_hash: str
+    ) -> tuple[bool, str | None]:
+        """Verify a password and upgrade its hash to the current policy if needed."""
+        try:
+            return self._hasher.verify_and_update(password=password, hash=password_hash)
+        except PwdlibError as exc:
+            logger.exception("Password verification or hash upgrade failed")
+            raise PasswordHasherError from exc

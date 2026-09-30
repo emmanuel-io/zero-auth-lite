@@ -1,42 +1,57 @@
 """Built-in browser interaction for the OAuth2 device grant."""
 
 from typing import Annotated
+from urllib.parse import urlencode, urlsplit, urlunsplit
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
-from starlette.responses import HTMLResponse, RedirectResponse
+from starlette.responses import HTMLResponse
 
 from app.browser_sessions.dependencies import (
     CurrentBrowserFormUserContextDep,
     PublicOptionalBrowserUserContextDep,
-    SessionLifecycleServiceDep,
 )
+from app.browser_sessions.service_dependencies import BrowserSessionLifecycleServiceDep
 from app.oauth2.devices.dependencies import DeviceAuthorizationServiceDep
 from app.oauth2.devices.forms import DeviceVerificationForm
+from app.oauth2.specs import OAuth2Specs
 from app.openapi_tags import OAUTH2_DEVICE_FLOW_TAG
 from app.settings.dependencies import SettingsDep
-from app.web.redirects import authentication_entry_url
-from app.web.rendering import render_page
+from app.settings.ui import BUILTIN_DEVICE_INTERACTION_PATH
+from app.web.rendering import no_store_redirect, render_page
+from app.web.routes import BrowserPageRoute
 
 
-router = APIRouter(tags=[OAUTH2_DEVICE_FLOW_TAG])
+router = APIRouter(tags=[OAUTH2_DEVICE_FLOW_TAG], route_class=BrowserPageRoute)
 
 
-@router.get("/oauth2/device/verify", name="device_verify_page")
+@router.get(BUILTIN_DEVICE_INTERACTION_PATH, name="device_verify_page")
 async def device_verify_page(
     request: Request,
-    lifecycle_service: SessionLifecycleServiceDep,
+    lifecycle_service: BrowserSessionLifecycleServiceDep,
     user_ctx: PublicOptionalBrowserUserContextDep,
     settings: SettingsDep,
-    user_code: Annotated[str | None, Query()] = None,
+    user_code: Annotated[
+        str | None, Query(max_length=OAuth2Specs.PROTOCOL_VALUE_LENGTH_MAX)
+    ] = None,
 ) -> Response:
     """Authenticate the user when needed, then render device verification."""
     if user_ctx is None:
-        return RedirectResponse(
-            authentication_entry_url(settings, device_code=user_code),
+        query = urlencode({"user_code": user_code}) if user_code is not None else ""
+        login_url = urlsplit(settings.ui.urls.authorization_interaction)
+        return no_store_redirect(
+            urlunsplit(
+                (
+                    login_url.scheme,
+                    login_url.netloc,
+                    login_url.path,
+                    query,
+                    "",
+                )
+            ),
             status_code=status.HTTP_303_SEE_OTHER,
         )
     csrf_token = await lifecycle_service.get_session_csrf(
-        session_id=user_ctx.session_id
+        session_id=user_ctx.raw_session_id
     )
     return render_page(
         request,
@@ -47,15 +62,16 @@ async def device_verify_page(
     )
 
 
-@router.post("/oauth2/device/verify")
+@router.post(BUILTIN_DEVICE_INTERACTION_PATH)
 async def device_verify_submit(
     request: Request,
     device_authorization_service: DeviceAuthorizationServiceDep,
     user_ctx: CurrentBrowserFormUserContextDep,
+    settings: SettingsDep,
     form: Annotated[DeviceVerificationForm, Depends()],
 ) -> HTMLResponse:
     """Apply an authenticated device authorization decision."""
-    ok = await device_authorization_service.approve_device_authorization(
+    ok = await device_authorization_service.decide_device_authorization(
         user_ctx=user_ctx,
         user_code=form.user_code,
         approve=form.decision == "approve",
@@ -67,7 +83,7 @@ async def device_verify_submit(
             status_code=status.HTTP_400_BAD_REQUEST,
             title="Invalid or expired code",
             message="This device request is invalid, expired, or already completed.",
-            link_url="/oauth2/device/verify",
+            link_url=settings.ui.urls.device_interaction,
             link_label="Try another code",
         )
     approved = form.decision == "approve"

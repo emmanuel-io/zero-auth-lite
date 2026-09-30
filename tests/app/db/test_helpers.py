@@ -3,6 +3,7 @@
 import json
 import logging
 import sqlite3
+from typing import Literal
 
 import pytest
 from app.core.errors.handlers import app_error_handler
@@ -55,7 +56,7 @@ def _integrity_error(message: str) -> IntegrityError:
     return IntegrityError("statement", {}, sqlite3.IntegrityError(message))
 
 
-def _request(environment: str) -> Request:
+def _request(environment: Literal["development", "deployment"]) -> Request:
     app = FastAPI()
     settings = Settings().model_copy(
         update={"app": AppSettings(environment=environment)}
@@ -85,8 +86,8 @@ def test_map_integrity_error_preserves_safe_constraint_variant(
 
     assert isinstance(error, error_type)
     assert error.code == "DATA_CONFLICT"
-    assert error.formatted_message == "The requested data conflicts with stored data."
-    assert error.payload.model_dump(mode="json")["details"] == [
+    assert error.message == "The requested data conflicts with stored data."
+    assert error.response_payload().model_dump(mode="json")["details"] == [
         {"location": [], "message": detail_message, "type": detail_type}
     ]
     assert any(

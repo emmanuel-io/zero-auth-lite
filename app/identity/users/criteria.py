@@ -3,11 +3,14 @@
 from dataclasses import dataclass
 from datetime import date
 from typing import Literal, TypeAlias
+from uuid import UUID
 
-from app.public_ids import PublicId
 
-
-UserRoleFilter: TypeAlias = Literal["admin", "member"]  # noqa: UP040
+# FastAPI inspects these aliases at runtime when building the query-parameter
+# schema and does not currently resolve their PEP 695 ``TypeAliasType`` form.
+OrganizationMembershipRoleFilter: TypeAlias = Literal[  # noqa: UP040
+    "admin", "member"
+]
 OrganizationUserSort: TypeAlias = Literal[  # noqa: UP040
     "email",
     "-email",
@@ -22,7 +25,7 @@ OrganizationUserSort: TypeAlias = Literal[  # noqa: UP040
     "created_at",
     "-created_at",
 ]
-OperatorUserSort: TypeAlias = Literal[  # noqa: UP040
+ServerUserSort: TypeAlias = Literal[  # noqa: UP040
     "email",
     "-email",
     "first_name",
@@ -46,7 +49,7 @@ class OrganizationUserSearchCriteriaDTO:
 
     q: str | None = None
     sort: OrganizationUserSort | None = None
-    role: UserRoleFilter | None = None
+    role: OrganizationMembershipRoleFilter | None = None
     active: bool | None = None
     email_verified: bool | None = None
     created_from: date | None = None
@@ -56,20 +59,25 @@ class OrganizationUserSearchCriteriaDTO:
 
 
 @dataclass(frozen=True, slots=True)
-class OperatorUserSearchCriteriaDTO:
+class ServerUserSearchCriteriaDTO:
     """Search criteria accepted by server-operator user administration."""
 
     q: str | None = None
-    sort: OperatorUserSort | None = None
-    role: UserRoleFilter | None = None
+    sort: ServerUserSort | None = None
+    role: OrganizationMembershipRoleFilter | None = None
     operator: bool | None = None
     active: bool | None = None
     email_verified: bool | None = None
-    organization_id: PublicId | None = None
+    organization_id: UUID | None = None
     created_from: date | None = None
     created_to: date | None = None
     offset: int = 0
     limit: int = 20
+
+
+type UserSearchCriteriaDTO = (
+    OrganizationUserSearchCriteriaDTO | ServerUserSearchCriteriaDTO
+)
 
 
 @dataclass(frozen=True, slots=True)

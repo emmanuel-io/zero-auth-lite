@@ -32,8 +32,8 @@ async def test_logout_all_revokes_both_sessions_and_clears_the_calling_client(
     verified_user_credentials: UserCredentials,
 ) -> None:
     """Assert the all scope revokes all sessions for the current user."""
-    csrf_header_name = app.state.settings.session.csrf.header_name
-    session_cookie_name = app.state.settings.session.cookie_name
+    csrf_header_name = app.state.settings.browser_session.csrf.header_name
+    session_cookie_name = app.state.settings.browser_session.cookie_name
 
     async with (
         browser_client_factory() as first_client,
@@ -105,7 +105,7 @@ async def test_logout_others_preserves_the_calling_session(
     verified_user_credentials: UserCredentials,
 ) -> None:
     """Assert the others scope revokes every session except the caller."""
-    csrf_header_name = app.state.settings.session.csrf.header_name
+    csrf_header_name = app.state.settings.browser_session.csrf.header_name
 
     async with (
         browser_client_factory() as first_client,

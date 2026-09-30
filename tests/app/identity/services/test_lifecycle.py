@@ -2,26 +2,25 @@
 
 import pytest
 from app.db.models.organization_membership import OrganizationMembershipDB
-from app.events.types import AccountVerificationRequested, InviteCreated
-from app.identity.services.lifecycle_policy import EmailUpdatePolicy
 from app.identity.users.commands import (
     UserCreateCommand,
     UserOnboardingMode,
     UserUpdateCommand,
 )
-from app.identity.users.enums import OrganizationUserRole
+from app.identity.users.enums import EmailUpdatePolicy, OrganizationMembershipRole
 from app.identity.users.errors import (
     InactiveUserInvitationError,
     LastActiveOperatorError,
     LastActiveOrganizationAdminError,
 )
+from app.notifications.events import AccountVerificationRequested, InviteCreated
 from fastapi import FastAPI
 
 from .helpers import (
     build_lifecycle,
     create_organization,
     create_user,
-    FakeEventPublisher,
+    FakeNotificationPublisher,
     load_user,
 )
 
@@ -35,7 +34,7 @@ async def test_lifecycle_creates_invited_user_and_publishes_event(
 ) -> None:
     """Hash generated credentials before persisting an invited user."""
     organization = await create_organization(app, name="Lifecycle Invite")
-    publisher = FakeEventPublisher()
+    publisher = FakeNotificationPublisher()
     async with app.state.core_session_factory() as db_session:
         lifecycle = build_lifecycle(app, db_session, publisher=publisher)
         created, membership = await lifecycle.create(
@@ -47,7 +46,8 @@ async def test_lifecycle_creates_invited_user_and_publishes_event(
         )
 
     assert created.hashed_password
-    assert membership.role is OrganizationUserRole.MEMBER
+    assert created.invitation_pending is True
+    assert membership.role is OrganizationMembershipRole.MEMBER
     assert any(isinstance(event, InviteCreated) for event in publisher.events)
 
 
@@ -57,7 +57,7 @@ async def test_lifecycle_requests_verification_for_user_with_password(
 ) -> None:
     """Make administrator-created credentials usable after email verification."""
     organization = await create_organization(app, name="Lifecycle Password")
-    publisher = FakeEventPublisher()
+    publisher = FakeNotificationPublisher()
     async with app.state.core_session_factory() as db_session:
         lifecycle = build_lifecycle(app, db_session, publisher=publisher)
         created, _membership = await lifecycle.create(
@@ -70,6 +70,7 @@ async def test_lifecycle_requests_verification_for_user_with_password(
         )
 
     event = publisher.events[0]
+    assert created.invitation_pending is False
     assert isinstance(event, AccountVerificationRequested)
     assert event.user_public_id == created.public_id
     assert event.user_email_id == created.current_email.id
@@ -123,7 +124,7 @@ async def test_lifecycle_protects_last_organization_admin(app: FastAPI) -> None:
         app,
         organization_id=organization.id,
         email="lifecycle-admin@example.com",
-        role=OrganizationUserRole.ADMIN,
+        role=OrganizationMembershipRole.ADMIN,
     )
     async with app.state.core_session_factory() as db_session:
         lifecycle = build_lifecycle(app, db_session)
@@ -169,3 +170,24 @@ async def test_lifecycle_rejects_invitation_for_inactive_user(app: FastAPI) -> N
         target = await load_user(db_session, user.id)
         with pytest.raises(InactiveUserInvitationError):
             await lifecycle.resend_invitation(target=target)
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_does_not_invite_user_with_established_password(
+    app: FastAPI,
+) -> None:
+    """Do not turn an unverified password account into an invited account."""
+    organization = await create_organization(app, name="Lifecycle Password Invite")
+    user = await create_user(
+        app,
+        organization_id=organization.id,
+        email="lifecycle-password-invite@example.com",
+        email_verified=False,
+    )
+    publisher = FakeNotificationPublisher()
+    async with app.state.core_session_factory() as db_session:
+        lifecycle = build_lifecycle(app, db_session, publisher=publisher)
+        target = await load_user(db_session, user.id)
+        await lifecycle.resend_invitation(target=target)
+
+    assert publisher.events == []

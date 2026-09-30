@@ -30,15 +30,15 @@ class PaginatedResponse[T](BaseModel):
     items: list[T] = Field(description="List of items in the current page")
 
     offset: Annotated[
-        int | None,
+        int,
         Field(ge=0, description="Offset used in the query"),
-    ] = None
+    ]
     limit: Annotated[
-        int | None,
+        int,
         Field(
             ge=1,
             le=DEFAULT_PAGE_LIMIT_MAX,
             description="Limit used in the query",
         ),
-    ] = None
+    ]
     total: Annotated[int, Field(ge=0, description="Total number of available items")]

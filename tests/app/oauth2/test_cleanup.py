@@ -14,6 +14,7 @@ from tests.fixtures.oauth2 import (
     create_oauth2_test_client,
     create_oauth2_test_identity,
 )
+from tests.identifiers import deterministic_uuid
 
 
 pytestmark = pytest.mark.integration
@@ -24,13 +25,14 @@ async def test_oauth2_cleanup_deletes_expired_authorization_codes(
     app: FastAPI,
 ) -> None:
     """Assert cleanup queries live and execute inside the adapter."""
+
     organization_id, user_id = await create_oauth2_test_identity(app)
     await create_oauth2_test_client(app)
     async with app.state.core_session_factory() as db_session:
         await db_session.execute(
             insert(OAuth2AuthorizationCodeDB).values(
                 code_hash="a" * 64,
-                client_id="client",
+                client_id=deterministic_uuid("client"),
                 redirect_uri="https://client.example/callback",
                 scope="read",
                 code_challenge="challenge",
@@ -58,7 +60,7 @@ async def test_oauth2_cleanup_limits_each_table_batch(app: FastAPI) -> None:
             [
                 {
                     "code_hash": character * 64,
-                    "client_id": "client",
+                    "client_id": deterministic_uuid("client"),
                     "redirect_uri": "https://client.example/callback",
                     "scope": "read",
                     "code_challenge": "challenge",

@@ -1,11 +1,14 @@
 """Tests for the application password policy."""
 
 import pytest
-from app.api.v1.auth.schemas import PasswordTokenRequest, RegisterRequest
+from app.api.v1.auth.schemas import PasswordWorkflowTokenRequest, RegisterRequest
 from app.api.v1.browser_sessions.schemas import LoginRequest
 from app.identity.users.dtos import OrganizationUserCreateDTO, UserPasswordChangeDTO
-from app.password.errors import PasswordPolicyViolationError
-from app.password.validation import MAX_PASSWORD_LENGTH, validate_password
+from app.password.validation import (
+    MAX_PASSWORD_LENGTH,
+    PasswordPolicyViolationError,
+    validate_password,
+)
 from pydantic import BaseModel, ValidationError
 
 
@@ -59,7 +62,7 @@ def test_validate_password_rejects_oversized_password() -> None:
             {"current_password": TEST_PASSWORD, "new_password": "weak"},
         ),
         (
-            PasswordTokenRequest,
+            PasswordWorkflowTokenRequest,
             {"token": "a" * 16, "password": "weak"},
         ),
     ],
@@ -78,7 +81,7 @@ def test_credential_write_schemas_apply_password_policy(
     [
         (
             LoginRequest,
-            {"username": "user@example.test", "password": "x"},
+            {"email": "user@example.test", "password": "x"},
         ),
         (
             RegisterRequest,
@@ -97,7 +100,7 @@ def test_credential_write_schemas_apply_password_policy(
             {"current_password": "x", "new_password": TEST_PASSWORD},
         ),
         (
-            PasswordTokenRequest,
+            PasswordWorkflowTokenRequest,
             {"token": "a" * 16, "password": "x"},
         ),
     ],

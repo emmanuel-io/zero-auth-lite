@@ -5,6 +5,7 @@ from collections.abc import Iterator
 
 import pytest
 from app.core.logs.config import (
+    ApplicationLogFormatter,
     configure_logging,
     LOG_FORMAT,
     QUIET_LIBRARY_LOG_LEVELS,
@@ -75,6 +76,37 @@ def test_configured_formatter_includes_correlation_id() -> None:
     )
 
 
+def test_configured_formatter_includes_application_context() -> None:
+    """Render allow-listed structured fields without multiline log injection."""
+    configure_logging("INFO")
+    handler = logging.getLogger().handlers[0]
+    assert isinstance(handler.formatter, ApplicationLogFormatter)
+    record = logging.LogRecord(
+        name="tests",
+        level=logging.WARNING,
+        pathname=__file__,
+        lineno=1,
+        msg="validation_failed",
+        args=(),
+        exc_info=None,
+    )
+    record.__dict__.update(
+        {
+            "correlation_id": "abc123",
+            "violations": [{"location": ["body", "name"], "type": "missing"}],
+            "untrusted_field": "must not be logged",
+        }
+    )
+
+    rendered = handler.formatter.format(record)
+
+    expected_fields = (
+        'fields={"violations":[{"location":["body","name"],"type":"missing"}]}'
+    )
+    assert expected_fields in rendered
+    assert "untrusted_field" not in rendered
+
+
 def test_debug_log_level_sets_root_logger_to_debug() -> None:
     """Assert DEBUG configures the root logger to DEBUG."""
     configure_logging("DEBUG")
@@ -99,7 +131,7 @@ def test_info_log_level_keeps_sql_queries_quiet() -> None:
 def test_settings_reject_invalid_log_level() -> None:
     """Assert invalid app log levels fail settings validation."""
     with pytest.raises(ValidationError, match="Input should be"):
-        AppSettings(log_level="TRACE")
+        AppSettings(log_level="TRACE")  # ty: ignore[invalid-argument-type]
 
 
 def test_configure_logging_can_be_called_repeatedly() -> None:

@@ -3,8 +3,7 @@
 from dataclasses import dataclass
 from datetime import datetime, UTC
 from logging import getLogger
-
-from app.public_ids import PublicId
+from uuid import UUID
 
 
 logger = getLogger(__name__)
@@ -19,19 +18,14 @@ def _assert_aware(value: datetime) -> None:
 
 @dataclass(frozen=True, slots=True)
 class LoginResultDTO:
-    """Browser-session transport values returned by a successful login.
+    """Browser-session transport values returned by a successful login."""
 
-    Attributes:
-        session (str): The session cookie content.
-        csrf (str): The CSRF cookie content.
-    """
-
-    session: str
-    csrf: str
+    raw_session_id: str
+    csrf_token: str
 
 
 @dataclass(frozen=True, slots=True)
-class SessionCreateDTO:
+class BrowserSessionCreateDTO:
     """Input for creating a browser session."""
 
     stored_session_id: str
@@ -49,11 +43,11 @@ class SessionCreateDTO:
 
 
 @dataclass(frozen=True, slots=True)
-class SessionReadDTO:
+class BrowserSessionReadDTO:
     """Stable browser-session state returned by services."""
 
     stored_session_id: str
-    public_id: PublicId
+    public_id: UUID
     user_id: int
     csrf: str
     absolute_expires_at: datetime
@@ -91,8 +85,16 @@ class SessionReadDTO:
 
 
 @dataclass(frozen=True, slots=True)
-class SessionSlideResultDTO:
+class BrowserSessionPageDTO:
+    """One page of browser sessions and the matching total count."""
+
+    items: list[BrowserSessionReadDTO]
+    total: int
+
+
+@dataclass(frozen=True, slots=True)
+class BrowserSessionSlideResultDTO:
     """Session state plus whether browser transport must extend its expiry."""
 
-    session: SessionReadDTO
+    session: BrowserSessionReadDTO
     expiry_extended: bool

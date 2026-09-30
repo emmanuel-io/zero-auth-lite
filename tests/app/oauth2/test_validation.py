@@ -1,31 +1,31 @@
 """Tests for pure OAuth2 service helper behavior."""
 
-from types import SimpleNamespace
-from typing import cast, TYPE_CHECKING
-
 import pytest
+from app.identity.dtos import IdentityUserDTO
 from app.oauth2.clients.dtos import OAuth2ClientReadDTO
-from app.oauth2.settings import OAuth2GrantType, OAuth2Settings
+from app.oauth2.grants.types import OAuth2GrantType
+from app.oauth2.settings import OAuth2Settings
 from app.oauth2.validation import (
     normalize_scope,
     normalize_user_code,
+    reject_redirect_uri_fragment,
     should_issue_refresh_token,
     user_display_name,
     validate_oidc_scope_enabled,
     validate_requested_scope,
 )
 
+from tests.identifiers import deterministic_uuid, PublicId
+
 
 pytestmark = pytest.mark.unit
-
-if TYPE_CHECKING:
-    from app.db.models.user import UserDB
 
 
 def _oauth2_client(*, grant_types: list[str]) -> OAuth2ClientReadDTO:
     """Build an OAuth2 client for pure policy tests."""
+
     return OAuth2ClientReadDTO(
-        client_id="test-client",
+        client_id=deterministic_uuid("test-client"),
         client_secret=None,
         name="Test client",
         grant_types=grant_types,
@@ -34,6 +34,20 @@ def _oauth2_client(*, grant_types: list[str]) -> OAuth2ClientReadDTO:
         is_confidential=False,
         requires_consent=False,
         is_active=True,
+    )
+
+
+def _identity_user(*, first_name: str, last_name: str) -> IdentityUserDTO:
+    """Build the identity fields required by display-name policy."""
+    return IdentityUserDTO(
+        id=1,
+        public_id=PublicId(1),
+        organization_id=2,
+        organization_public_id=PublicId(2),
+        email="user@example.com",
+        hashed_password="hash",  # noqa: S106
+        first_name=first_name,
+        last_name=last_name,
     )
 
 
@@ -55,6 +69,18 @@ def test_validate_requested_scope_accepts_registered_scopes() -> None:
         requested_scope="read write",
         allowed_scopes=["read", "write"],
     )
+
+
+def test_redirect_uri_without_fragment_is_accepted() -> None:
+    """Accept a runtime redirect URI whose complete value reaches the server."""
+    reject_redirect_uri_fragment("https://client.example/callback?source=login")
+
+
+@pytest.mark.negative
+def test_redirect_uri_fragment_is_rejected() -> None:
+    """Reject fragments because browsers never send them to the server."""
+    with pytest.raises(ValueError, match="invalid_redirect_uri"):
+        reject_redirect_uri_fragment("https://client.example/callback#fragment")
 
 
 @pytest.mark.negative
@@ -89,17 +115,14 @@ def test_validate_oidc_scope_enabled_ignores_non_oidc_scope_when_disabled() -> N
 
 def test_user_display_name_joins_available_profile_names() -> None:
     """Assert user display names are built from available name fields."""
-    user = cast(
-        "UserDB",
-        SimpleNamespace(first_name="Ada", last_name="Lovelace"),
-    )
+    user = _identity_user(first_name="Ada", last_name="Lovelace")
 
     assert user_display_name(user) == "Ada Lovelace"
 
 
 def test_user_display_name_returns_none_without_profile_names() -> None:
     """Assert missing profile names produce no display name claim."""
-    user = cast("UserDB", SimpleNamespace(first_name="", last_name=""))
+    user = _identity_user(first_name="", last_name="")
 
     assert user_display_name(user) is None
 
@@ -111,7 +134,7 @@ def test_normalize_user_code_removes_spaces_and_uppercases() -> None:
 
 def test_refresh_token_issuance_requires_enabled_server_grant() -> None:
     """Assert disabled server configuration prevents refresh-token issuance."""
-    client = _oauth2_client(grant_types=[OAuth2GrantType.refresh_token.value])
+    client = _oauth2_client(grant_types=[OAuth2GrantType.REFRESH_TOKEN.value])
 
     assert not should_issue_refresh_token(
         settings=OAuth2Settings.disabled(), client=client
@@ -133,6 +156,6 @@ def test_refresh_token_issuance_accepts_enabled_client_grant() -> None:
     settings = OAuth2Settings.disabled().model_copy(
         update={"refresh_token_enabled": True}
     )
-    client = _oauth2_client(grant_types=[OAuth2GrantType.refresh_token.value])
+    client = _oauth2_client(grant_types=[OAuth2GrantType.REFRESH_TOKEN.value])
 
     assert should_issue_refresh_token(settings=settings, client=client)

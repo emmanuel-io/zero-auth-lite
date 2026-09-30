@@ -7,11 +7,12 @@ architecture.
 Set `ZA_APP__ENVIRONMENT=deployment` before exposing the server. Startup
 then rejects the checked-in development secrets and signing key, missing
 trusted hosts, insecure browser-session or CSRF cookies,
-non-HTTPS public issuer and email URLs, malformed deployment origins, local-only
-hosts in issuer, email, cookie, CORS, and CSRF settings, and disabled workflow
-email delivery. It also rejects disabling both browser sessions and all OAuth2
-grants. These checks catch unsafe local defaults; the rest of this checklist
-still applies.
+non-HTTPS public issuer and, when identity workflows are reachable, email URLs,
+malformed deployment origins, local-only hosts in active issuer, email, cookie,
+CORS, and CSRF settings, and disabled mail while those workflows remain
+reachable. It also rejects disabling both browser sessions and all OAuth2
+grants, or leaving self-registration enabled without browser sessions. These
+checks catch unsafe local defaults; the rest of this checklist still applies.
 
 It targets prototypes, internal applications, and nominal-load deployments on
 one node. This checklist hardens that deployment model; it does not
@@ -29,13 +30,13 @@ turn Zero Auth Lite into a high-availability multi-node service.
 
 ## Secrets And Keys
 
-- Replace every development hash secret with independent random values of at
-  least the required length.
+- Replace every development hash secret used by an enabled capability with an
+  independent random value of at least the required length.
 - Store private signing keys and client secrets outside source control.
 - Define a signing-key rotation procedure and retain old public keys until
   affected tokens expire.
 - Remove first-run bootstrap credentials after use.
-- Rotate auth-token derivation secrets with a new key identifier and retain the
+- Rotate workflow-token derivation secrets with a new key identifier and retain the
   previous identifier and secret until no stored workflow token references it.
 
 ## TLS, Hosts, And Proxies
@@ -66,7 +67,10 @@ header. The same pages send a restrictive Content Security Policy that permits
 same-origin styles and forms while rejecting other content, framing, and
 document base overrides.
 Preserve these headers at the reverse proxy and keep request URLs and headers
-containing workflow tokens out of access logs.
+containing workflow tokens out of access logs. The canonical Uvicorn commands
+disable its access logger because it includes query strings; the application
+request logger records only the URL path. Apply equivalent query-string
+redaction or suppression to every reverse proxy and gateway.
 
 ## Persistence
 
@@ -113,11 +117,20 @@ SQLite identity provider rather than edge-security infrastructure.
 Follow the [logging and monitoring](logging.md) guidance and keep all tokens,
 secrets, and notification links out of logs.
 
+SMTP SSL and STARTTLS verify the mail server certificate and hostname against
+the operating system trust store. Install a private certificate authority in
+that trust store when the deployment uses an internal SMTP relay; do not disable
+certificate verification. Deployment mode requires one of these TLS modes for
+mail delivery, and SMTP authentication is never permitted over plaintext.
+Configure an explicit sender address on a domain controlled by the deployment;
+the packaged `zero-auth-lite@example.com` address is for local examples only.
+
 ## Unsupported Guarantees
 
 Zero Auth Lite does not provide high availability or supported multi-node
 deployment. It also does not provide disaster recovery, external secret
 management, distributed tracing, managed key custody, automated key rotation,
-production mail delivery, fraud detection, compliance certification, or
-enterprise identity protocols. The deploying application must supply the
-controls required by its threat model.
+a managed mail-delivery service, fraud detection, compliance certification, or
+enterprise identity protocols. The generic SMTP transport sends authentication
+messages through infrastructure selected and operated by the deployment. The
+deploying application must supply the controls required by its threat model.

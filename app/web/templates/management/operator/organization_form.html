@@ -1,0 +1,16 @@
+{% extends "management/base.html" %}
+{% block title %}Create organization · Zero Auth Lite{% endblock %}
+{% block content %}
+  <header class="page-header"><p class="eyebrow">Organizations</p><h1>Create organization</h1></header>
+  <section class="panel form-panel">
+    <form class="form-stack" method="post" action="/management/operator/organizations" hx-post="/management/operator/organizations">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="field">
+        <label for="name">Name</label>
+        <input id="name" name="name" maxlength="{{ form_constraints.organization_name_max }}" required>
+      </div>
+      <div class="form-actions"><button class="button button--primary" type="submit">Create organization</button></div>
+    </form>
+  </section>
+  <a class="text-link" href="/management/operator/organizations">Back to organizations</a>
+{% endblock %}

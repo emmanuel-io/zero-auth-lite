@@ -6,12 +6,12 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors.common import ForbiddenOperationError, ObjectNotFoundError
 from app.db.helpers import map_integrity_error
 from app.db.models.organization import OrganizationDB
-from app.enums import Role
-from app.errors import ForbiddenOperationError, ObjectNotFoundError
 from app.identity.organizations.dtos import OrganizationReadDTO, OrganizationUpdateDTO
-from app.security.dtos import UserPrincipalContext
+from app.security.principals import UserPrincipalContext
+from app.security.roles import Role
 
 
 logger = getLogger(__name__)
@@ -21,11 +21,11 @@ class OrganizationMetadataService:
     """Manage metadata for the authenticated user's organization."""
 
     def __init__(
-        self, *, db_session: AsyncSession, user_ctx: UserPrincipalContext
+        self, *, db_session: AsyncSession, actor_ctx: UserPrincipalContext
     ) -> None:
         """Initialize organization metadata administration."""
         self.db_session = db_session
-        self.actor_ctx = user_ctx
+        self.actor_ctx = actor_ctx
 
     def _require_actor(self) -> None:
         """Require an organization administrator at the service boundary."""

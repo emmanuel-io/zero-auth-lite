@@ -1,10 +1,18 @@
 """Black-box tests for `/api/v1/me` profile routes."""
 
+from datetime import datetime, timedelta, UTC
+
 import httpx
 import pytest
-from fastapi import status
+from app.db.models.browser_session import BrowserSessionDB
+from fastapi import FastAPI, status
+from sqlalchemy import select, update
 
-from tests.fixtures.auth import login_browser, UserCredentials
+from tests.fixtures.auth import (
+    current_user_id_for_email,
+    login_browser,
+    UserCredentials,
+)
 from tests.routes.api.helpers import login_headers
 
 
@@ -28,6 +36,8 @@ async def test_user_can_read_and_patch_current_profile(
     )
 
     assert read_response.status_code == status.HTTP_200_OK
+    assert read_response.headers["Cache-Control"] == "no-store"
+    assert read_response.headers["Pragma"] == "no-cache"
     read_payload = read_response.json()
     assert read_payload["email"] == verified_user_credentials.email
     assert read_payload["organization"] == {"name": "Test Organization"}
@@ -98,11 +108,31 @@ async def test_user_changes_password_through_dedicated_route(
 @pytest.mark.asyncio
 @pytest.mark.negative
 async def test_password_change_rejects_wrong_current_password(
+    app: FastAPI,
     client: httpx.AsyncClient,
     verified_user_credentials: UserCredentials,
 ) -> None:
-    """Leave the credential unchanged when current-password verification fails."""
+    """Discard session activity when current-password verification fails."""
     headers = await login_headers(client, verified_user_credentials)
+    now = datetime.now(UTC)
+    expected_expires_at = now + timedelta(
+        seconds=app.state.settings.browser_session.slide_seconds - 1
+    )
+    expected_last_seen_at = now - timedelta(
+        seconds=app.state.settings.browser_session.slide_seconds + 1
+    )
+    async with app.state.core_session_factory.begin() as db_session:
+        await db_session.execute(
+            update(BrowserSessionDB)
+            .where(
+                BrowserSessionDB.user_id
+                == current_user_id_for_email(verified_user_credentials.email)
+            )
+            .values(
+                expires_at=expected_expires_at,
+                last_seen_at=expected_last_seen_at,
+            )
+        )
 
     response = await client.post(
         "/api/v1/me/password",
@@ -112,9 +142,24 @@ async def test_password_change_rejects_wrong_current_password(
         },
         headers=headers,
     )
+    async with app.state.core_session_factory() as db_session:
+        persisted_activity = (
+            await db_session.execute(
+                select(
+                    BrowserSessionDB.expires_at, BrowserSessionDB.last_seen_at
+                ).where(
+                    BrowserSessionDB.user_id
+                    == current_user_id_for_email(verified_user_credentials.email)
+                )
+            )
+        ).one()
 
     assert response.status_code == status.HTTP_401_UNAUTHORIZED
     assert response.json()["message"] == "Invalid password"
+    assert persisted_activity == (
+        expected_expires_at.replace(tzinfo=None),
+        expected_last_seen_at.replace(tzinfo=None),
+    )
 
 
 @pytest.mark.asyncio
@@ -149,6 +194,26 @@ async def test_profile_write_rejects_explicit_nulls(
     response = await client.patch(
         "/api/v1/me",
         json={field: None},
+        headers=headers,
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+
+
+@pytest.mark.asyncio
+@pytest.mark.negative
+@pytest.mark.parametrize("field", ["first_name", "last_name"])
+async def test_profile_write_rejects_names_unsafe_for_email_headers(
+    client: httpx.AsyncClient,
+    verified_user_credentials: UserCredentials,
+    field: str,
+) -> None:
+    """Reject profile names containing email-header line breaks."""
+    headers = await login_headers(client, verified_user_credentials)
+
+    response = await client.patch(
+        "/api/v1/me",
+        json={field: "Header\r\nInjection"},
         headers=headers,
     )
 

@@ -3,7 +3,11 @@
 import threading
 
 import pytest
-from app.password.async_hashing import hash_password, verify_password
+from app.password.async_hashing import (
+    hash_password,
+    verify_and_update_password,
+    verify_password,
+)
 
 
 pytestmark = pytest.mark.unit
@@ -26,6 +30,14 @@ class RecordingPasswordHasher:
         self.thread_ids.append(threading.get_ident())
         return password_hash == f"hashed:{password}"
 
+    def verify_and_update(
+        self, *, password: str, password_hash: str
+    ) -> tuple[bool, str | None]:
+        """Verify and return a deterministic replacement hash."""
+        self.thread_ids.append(threading.get_ident())
+        valid = password_hash == f"hashed:{password}"
+        return valid, f"updated:{password}" if valid else None
+
 
 @pytest.mark.asyncio
 async def test_password_operations_run_outside_the_event_loop_thread() -> None:
@@ -39,8 +51,15 @@ async def test_password_operations_run_outside_the_event_loop_thread() -> None:
         password="secret",  # noqa: S106
         password_hash=password_hash,
     )
+    update_valid, replacement_hash = await verify_and_update_password(
+        password_hasher,
+        password="secret",  # noqa: S106
+        password_hash=password_hash,
+    )
 
     assert valid is True
+    assert update_valid is True
+    assert replacement_hash == "updated:secret"
     assert password_hasher.thread_ids
     assert all(
         thread_id != event_loop_thread for thread_id in password_hasher.thread_ids

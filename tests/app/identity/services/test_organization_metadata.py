@@ -1,18 +1,19 @@
 """Tests for organization metadata behavior at actor-focused boundaries."""
 
 import pytest
+from app.core.errors.common import ForbiddenOperationError, ObjectNotFoundError
 from app.db.errors import CheckViolationError
 from app.db.models.organization import OrganizationDB
-from app.enums import Role
-from app.errors import ForbiddenOperationError, ObjectNotFoundError
 from app.identity.organizations.dtos import OrganizationCreateDTO, OrganizationUpdateDTO
-from app.identity.services.operator_organizations import OperatorOrganizationsService
 from app.identity.services.organization_metadata import OrganizationMetadataService
-from app.public_ids import PublicId
-from app.security.dtos import BrowserUserPrincipalContext
+from app.identity.services.server_organizations import ServerOrganizationsService
+from app.security.principals import BrowserUserPrincipalContext
+from app.security.roles import Role
 from fastapi import FastAPI
 from sqlalchemy import func, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from tests.identifiers import PublicId
 
 
 pytestmark = pytest.mark.integration
@@ -31,10 +32,12 @@ def organization_service(
     """Build an organization-scoped service for metadata tests."""
     return OrganizationMetadataService(
         db_session=db_session,
-        user_ctx=BrowserUserPrincipalContext(
+        actor_ctx=BrowserUserPrincipalContext(
             user_id=1,
             organization_id=organization_id,
-            session_id="session",
+            raw_session_id="session",
+            user_public_id=PublicId(1),
+            organization_public_id=PublicId(organization_id),
             roles=frozenset({Role.ORGANIZATION_ADMIN}),
         ),
     )
@@ -42,14 +45,16 @@ def organization_service(
 
 def operator_service(
     db_session: AsyncSession, *, organization_id: int
-) -> OperatorOrganizationsService:
+) -> ServerOrganizationsService:
     """Build an operator-scoped service for organization metadata tests."""
-    return OperatorOrganizationsService(
+    return ServerOrganizationsService(
         db_session=db_session,
-        user_ctx=BrowserUserPrincipalContext(
+        actor_ctx=BrowserUserPrincipalContext(
             user_id=1,
             organization_id=organization_id,
-            session_id="session",
+            raw_session_id="session",
+            user_public_id=PublicId(1),
+            organization_public_id=PublicId(organization_id),
             roles=frozenset({Role.OPERATOR}),
         ),
     )
@@ -228,8 +233,12 @@ async def test_organization_metadata_requires_organization_admin_role(
     async with app.state.core_session_factory() as db_session:
         service = OrganizationMetadataService(
             db_session=db_session,
-            user_ctx=BrowserUserPrincipalContext(
-                user_id=1, organization_id=1, session_id="session"
+            actor_ctx=BrowserUserPrincipalContext(
+                user_id=1,
+                organization_id=1,
+                raw_session_id="session",
+                user_public_id=PublicId(1),
+                organization_public_id=PublicId(1),
             ),
         )
         operation_call = (

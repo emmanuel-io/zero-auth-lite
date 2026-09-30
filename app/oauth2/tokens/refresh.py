@@ -10,31 +10,36 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.dependencies import independent_transaction
 from app.db.models.oauth2_session import OAuth2SessionDB
-from app.db.models.oauth2_token_pair import (
+from app.db.models.oauth2_token_state import (
     OAuth2RefreshTokenHistoryDB,
-    OAuth2TokenPairDB,
+    OAuth2TokenStateDB,
 )
+from app.identity.dtos import IdentityDTO
 from app.oauth2.clients.auth import ClientAuth, lock_and_reload_token_client
+from app.oauth2.clients.dtos import OAuth2ClientReadDTO
 from app.oauth2.clients.user_organization_authorization import (
     ensure_client_allows_user_organization,
     OAuth2ClientNotAllowedForUserOrganizationError,
 )
+from app.oauth2.error_codes import OAuth2ErrorCode
 from app.oauth2.errors import OAuth2InvalidGrantError, OAuth2ProtocolError
 from app.oauth2.grants.request import RefreshTokenGrantRequest
-from app.oauth2.public_ids import format_oauth2_session_id
-from app.oauth2.schemas import TokenPair
-from app.oauth2.session_mapping import to_oauth2_token_family_dto
-from app.oauth2.settings import OAuth2GrantType, OAuth2Settings
+from app.oauth2.grants.types import OAuth2GrantType
+from app.oauth2.schemas import OAuth2TokenResponse
+from app.oauth2.sessions.mapping import to_oauth2_token_family_dto
+from app.oauth2.settings import OAuth2Settings
 from app.oauth2.tokens.access import (
     create_access_token_payload,
 )
-from app.oauth2.tokens.dtos import TokenPairUpdateDTO
+from app.oauth2.tokens.dtos import (
+    OAuth2TokenFamilyReadDTO,
+    OAuth2TokenStateUpdateDTO,
+)
 from app.oauth2.tokens.hash import hash_oauth2_token
 from app.oauth2.tokens.issuance import TokenIssuanceService
 from app.oauth2.user_identity import load_eligible_oauth2_user_identity
 from app.oauth2.validation import (
     client_allows_grant,
-    ERR_UNSUPPORTED_GRANT_TYPE,
     validate_oidc_scope_enabled,
     validate_requested_scope,
 )
@@ -49,21 +54,21 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
 
-async def rotate_token_pair(
+async def rotate_token_state(
     *,
     db_session: AsyncSession,
     settings: OAuth2Settings,
     session_id: int,
     current_refresh_hash: str,
-    data: TokenPairUpdateDTO,
+    data: OAuth2TokenStateUpdateDTO,
 ) -> bool:
-    """Atomically replace a token pair only if its refresh token is current."""
+    """Atomically replace token state only if its refresh token is current."""
     result = cast(
         "CursorResult[object]",
         await db_session.execute(
-            update(OAuth2TokenPairDB)
-            .where(OAuth2TokenPairDB.session_id == session_id)
-            .where(OAuth2TokenPairDB.refresh_token_hash == current_refresh_hash)
+            update(OAuth2TokenStateDB)
+            .where(OAuth2TokenStateDB.session_id == session_id)
+            .where(OAuth2TokenStateDB.refresh_token_hash == current_refresh_hash)
             .values(
                 access_expires_at=data.access_expires_at,
                 access_jti=data.access_jti,
@@ -91,15 +96,15 @@ async def revoke_reused_refresh_family(
     async with independent_transaction(session_factory) as db_session:
         session_row = (
             await db_session.execute(
-                select(OAuth2TokenPairDB.session_id, OAuth2SessionDB.public_id)
+                select(OAuth2TokenStateDB.session_id, OAuth2SessionDB.public_id)
                 .join(
                     OAuth2RefreshTokenHistoryDB,
                     OAuth2RefreshTokenHistoryDB.session_id
-                    == OAuth2TokenPairDB.session_id,
+                    == OAuth2TokenStateDB.session_id,
                 )
                 .join(
                     OAuth2SessionDB,
-                    OAuth2SessionDB.id == OAuth2TokenPairDB.session_id,
+                    OAuth2SessionDB.id == OAuth2TokenStateDB.session_id,
                 )
                 .where(OAuth2RefreshTokenHistoryDB.token_hash == refresh_hash)
             )
@@ -114,14 +119,16 @@ async def revoke_reused_refresh_family(
             .values(ended_at=datetime.now(UTC))
         )
         await db_session.execute(
-            delete(OAuth2TokenPairDB).where(OAuth2TokenPairDB.session_id == session_id)
+            delete(OAuth2TokenStateDB).where(
+                OAuth2TokenStateDB.session_id == session_id
+            )
         )
     logger.warning(
         (
             "event=oauth2_refresh_reuse outcome=revoked session_id=%s "
             "reason=reused_refresh_token"
         ),
-        format_oauth2_session_id(session_public_id),
+        str(session_public_id),
     )
 
 
@@ -135,11 +142,11 @@ async def expire_refresh_family(
     """Remove an expired current pair in an independent transaction."""
     async with independent_transaction(session_factory) as db_session:
         deleted_session_id = await db_session.scalar(
-            delete(OAuth2TokenPairDB)
-            .where(OAuth2TokenPairDB.session_id == session_id)
-            .where(OAuth2TokenPairDB.refresh_token_hash == refresh_hash)
-            .where(OAuth2TokenPairDB.refresh_expires_at <= expired_at)
-            .returning(OAuth2TokenPairDB.session_id)
+            delete(OAuth2TokenStateDB)
+            .where(OAuth2TokenStateDB.session_id == session_id)
+            .where(OAuth2TokenStateDB.refresh_token_hash == refresh_hash)
+            .where(OAuth2TokenStateDB.refresh_expires_at <= expired_at)
+            .returning(OAuth2TokenStateDB.session_id)
         )
         if deleted_session_id is None:
             return
@@ -151,29 +158,20 @@ async def expire_refresh_family(
         )
 
 
-# Rotation, reuse detection, and replacement issuance share one transaction;
-# preserving their order is more important than shortening this function.
-async def handle_refresh_token_grant(  # noqa: C901, PLR0912, PLR0913, PLR0915
-    request: RefreshTokenGrantRequest,
+async def _load_refresh_family(
     *,
     db_session: AsyncSession,
     session_factory: "async_sessionmaker[AsyncSession]",
-    settings: OAuth2Settings,
-    client_auth: ClientAuth | None,
-    signing_key: ed25519.Ed25519PrivateKey | str,
-) -> TokenPair:
-    """Validate and atomically rotate one refresh token."""
-    if not settings.is_grant_enabled(OAuth2GrantType.refresh_token):
-        raise OAuth2ProtocolError(error=ERR_UNSUPPORTED_GRANT_TYPE)
-    refresh_hash = hash_oauth2_token(
-        token=request.refresh_token,
-        secret=settings.token_hash_secret.get_secret_value(),
-    )
+    refresh_hash: str,
+) -> OAuth2TokenFamilyReadDTO:
+    """Load a current family or revoke a family found through reuse history."""
     family_row = (
         await db_session.execute(
-            select(OAuth2SessionDB, OAuth2TokenPairDB)
-            .join(OAuth2TokenPairDB, OAuth2TokenPairDB.session_id == OAuth2SessionDB.id)
-            .where(OAuth2TokenPairDB.refresh_token_hash == refresh_hash)
+            select(OAuth2SessionDB, OAuth2TokenStateDB)
+            .join(
+                OAuth2TokenStateDB, OAuth2TokenStateDB.session_id == OAuth2SessionDB.id
+            )
+            .where(OAuth2TokenStateDB.refresh_token_hash == refresh_hash)
         )
     ).one_or_none()
     if family_row is None:
@@ -182,32 +180,50 @@ async def handle_refresh_token_grant(  # noqa: C901, PLR0912, PLR0913, PLR0915
             refresh_hash=refresh_hash,
         )
         raise OAuth2InvalidGrantError
-    family = to_oauth2_token_family_dto(*family_row)
-    token_pair = family.token_pair
-    oauth2_session = family.session
-    if request.scope is not None:
-        raise OAuth2InvalidGrantError(REFRESH_SCOPE_NARROWING_UNSUPPORTED)
-    if token_pair.refresh_expires_at is None:
+    return to_oauth2_token_family_dto(*family_row)
+
+
+async def _require_unexpired_refresh_family(
+    *,
+    family: OAuth2TokenFamilyReadDTO,
+    session_factory: "async_sessionmaker[AsyncSession]",
+    refresh_hash: str,
+) -> datetime:
+    """Reject an unusable refresh deadline and persist expiry cleanup."""
+    refresh_expires_at = family.token_state.refresh_expires_at
+    if refresh_expires_at is None:
         raise OAuth2InvalidGrantError
     now = datetime.now(UTC)
-    if token_pair.refresh_expires_at <= now:
+    if refresh_expires_at <= now:
         await expire_refresh_family(
             session_factory=session_factory,
-            session_id=token_pair.session_id,
+            session_id=family.token_state.session_id,
             refresh_hash=refresh_hash,
             expired_at=now,
         )
         raise OAuth2InvalidGrantError
+    return refresh_expires_at
 
-    client_auth = await lock_and_reload_token_client(db_session, client_auth)
-    client = None
-    if client_auth is None or client_auth.client_id != oauth2_session.client_id:
+
+async def _validate_refresh_client(
+    *,
+    db_session: AsyncSession,
+    settings: OAuth2Settings,
+    client_auth: ClientAuth | None,
+    family: OAuth2TokenFamilyReadDTO,
+) -> OAuth2ClientReadDTO:
+    """Reload the bound client and revalidate its current refresh policy."""
+    if client_auth is not None:
+        # Release the family and client-authentication reads before taking
+        # SQLite's writer lock for refresh rotation.
+        await db_session.commit()
+    current_auth = await lock_and_reload_token_client(db_session, client_auth)
+    oauth2_session = family.session
+    if current_auth is None or current_auth.client_id != oauth2_session.client_id:
         raise OAuth2InvalidGrantError
-    client = client_auth.client
-    if (
-        client is None
-        or not client.is_active
-        or not client_allows_grant(client, OAuth2GrantType.refresh_token)
+    client = current_auth.client
+    if not client.is_active or not client_allows_grant(
+        client, OAuth2GrantType.REFRESH_TOKEN
     ):
         raise OAuth2InvalidGrantError
     try:
@@ -221,10 +237,19 @@ async def handle_refresh_token_grant(  # noqa: C901, PLR0912, PLR0913, PLR0915
         )
     except ValueError as exc:
         raise OAuth2InvalidGrantError from exc
-
     if not oauth2_session.is_active():
         raise OAuth2InvalidGrantError
+    return client
 
+
+async def _load_refresh_identity(
+    *,
+    db_session: AsyncSession,
+    client: OAuth2ClientReadDTO,
+    family: OAuth2TokenFamilyReadDTO,
+) -> IdentityDTO:
+    """Load the eligible user identity and enforce current organization access."""
+    oauth2_session = family.session
     identity = (
         await load_eligible_oauth2_user_identity(
             db_session=db_session,
@@ -236,54 +261,66 @@ async def handle_refresh_token_grant(  # noqa: C901, PLR0912, PLR0913, PLR0915
     )
     if identity is None:
         raise OAuth2InvalidGrantError
-    user, organization = identity.user, identity.organization
     try:
         await ensure_client_allows_user_organization(
             client=client,
-            organization_id=organization.id,
+            organization_id=identity.organization.id,
             db_session=db_session,
         )
     except OAuth2ClientNotAllowedForUserOrganizationError as exc:
         raise OAuth2InvalidGrantError from exc
+    return identity
 
+
+async def _rotate_refresh_family(  # noqa: PLR0913
+    *,
+    db_session: AsyncSession,
+    settings: OAuth2Settings,
+    signing_key: ed25519.Ed25519PrivateKey | str,
+    refresh_hash: str,
+    refresh_deadline: datetime,
+    family: OAuth2TokenFamilyReadDTO,
+    identity: IdentityDTO,
+) -> OAuth2TokenResponse:
+    """Create and atomically persist replacement tokens and reuse history."""
+    oauth2_session = family.session
+    token_state = family.token_state
+    user, organization = identity.user, identity.organization
     token_issuance = TokenIssuanceService(
         db_session=db_session,
         settings=settings,
         signing_key=signing_key,
     )
-    token_pair_data = token_issuance.create_rotation_tokens(
+    tokens = token_issuance.create_rotation_tokens(
         access_payload=create_access_token_payload(
             user_public_id=user.public_id,
             organization_public_id=organization.public_id,
-            audience=settings.jwt_audience,
+            audience=settings.access_token_audience,
             client_id=oauth2_session.client_id,
             scope=oauth2_session.scope,
         ),
-        refresh_deadline=token_pair.refresh_expires_at,
+        refresh_deadline=refresh_deadline,
     )
-    if (
-        token_pair_data.refresh_token is None
-        or token_pair_data.refresh_expires_at is None
-    ):
+    if tokens.refresh_token is None or tokens.refresh_expires_at is None:
         raise OAuth2InvalidGrantError
-    rotated = await rotate_token_pair(
+    rotated = await rotate_token_state(
         db_session=db_session,
         settings=settings,
-        session_id=token_pair.session_id,
+        session_id=token_state.session_id,
         current_refresh_hash=refresh_hash,
-        data=TokenPairUpdateDTO(
-            access_expires_at=token_pair_data.access_expires_at,
-            access_jti=token_pair_data.access_jti,
-            access_token=token_pair_data.access_token,
-            refresh_expires_at=token_pair_data.refresh_expires_at,
-            refresh_token=token_pair_data.refresh_token,
+        data=OAuth2TokenStateUpdateDTO(
+            access_expires_at=tokens.access_expires_at,
+            access_jti=tokens.access_jti,
+            access_token=tokens.access_token,
+            refresh_expires_at=tokens.refresh_expires_at,
+            refresh_token=tokens.refresh_token,
         ),
     )
     if not rotated:
         logger.info(
             "event=oauth2_refresh_rotation outcome=conflict "
             "session_id=%s client_id=%s grant_type=%s",
-            format_oauth2_session_id(oauth2_session.public_id),
+            str(oauth2_session.public_id),
             oauth2_session.client_id,
             oauth2_session.grant_type,
         )
@@ -291,7 +328,7 @@ async def handle_refresh_token_grant(  # noqa: C901, PLR0912, PLR0913, PLR0915
     db_session.add(
         OAuth2RefreshTokenHistoryDB(
             token_hash=refresh_hash,
-            session_id=token_pair.session_id,
+            session_id=token_state.session_id,
         )
     )
     await db_session.flush()
@@ -300,9 +337,61 @@ async def handle_refresh_token_grant(  # noqa: C901, PLR0912, PLR0913, PLR0915
             "event=oauth2_refresh_rotation outcome=attempted session_id=%s "
             "client_id=%s grant_type=%s"
         ),
-        format_oauth2_session_id(oauth2_session.public_id),
+        str(oauth2_session.public_id),
         oauth2_session.client_id,
         oauth2_session.grant_type,
     )
+    return token_issuance.build_response(tokens)
 
-    return token_issuance.build_response(token_pair_data)
+
+# Current-token rotation, consumed-token history, and replacement issuance share
+# the request transaction. Reuse revocation and expiry cleanup use independent
+# transactions so those security outcomes survive the returned invalid_grant.
+async def handle_refresh_token_grant(  # noqa: PLR0913
+    request: RefreshTokenGrantRequest,
+    *,
+    db_session: AsyncSession,
+    session_factory: "async_sessionmaker[AsyncSession]",
+    settings: OAuth2Settings,
+    client_auth: ClientAuth | None,
+    signing_key: ed25519.Ed25519PrivateKey | str,
+) -> OAuth2TokenResponse:
+    """Validate and atomically rotate one refresh token."""
+    if not settings.is_grant_enabled(OAuth2GrantType.REFRESH_TOKEN):
+        raise OAuth2ProtocolError(error=OAuth2ErrorCode.UNSUPPORTED_GRANT_TYPE)
+    refresh_hash = hash_oauth2_token(
+        token=request.refresh_token,
+        secret=settings.token_hash_secret.get_secret_value(),
+    )
+    family = await _load_refresh_family(
+        db_session=db_session,
+        session_factory=session_factory,
+        refresh_hash=refresh_hash,
+    )
+    if request.scope is not None:
+        raise OAuth2InvalidGrantError(REFRESH_SCOPE_NARROWING_UNSUPPORTED)
+    refresh_deadline = await _require_unexpired_refresh_family(
+        family=family,
+        session_factory=session_factory,
+        refresh_hash=refresh_hash,
+    )
+    client = await _validate_refresh_client(
+        db_session=db_session,
+        settings=settings,
+        client_auth=client_auth,
+        family=family,
+    )
+    identity = await _load_refresh_identity(
+        db_session=db_session,
+        client=client,
+        family=family,
+    )
+    return await _rotate_refresh_family(
+        db_session=db_session,
+        settings=settings,
+        signing_key=signing_key,
+        refresh_hash=refresh_hash,
+        refresh_deadline=refresh_deadline,
+        family=family,
+        identity=identity,
+    )

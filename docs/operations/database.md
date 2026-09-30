@@ -41,7 +41,7 @@ reads during writes, enforcing foreign keys, and reducing short lock failures
 when multiple requests touch the same SQLite database.
 
 Feature dependencies use SQLAlchemy for all durable authentication state.
-Browser sessions, OAuth2 sessions, token pairs, and refresh-token history share
+Browser sessions, OAuth2 sessions, token states, and refresh-token history share
 request-scoped SQLAlchemy transactions where their lifecycle requires it.
 An OAuth2 session owns immutable client, grant, scope, and principal metadata.
 Its token-pair row owns only the currently usable token hashes, identifiers,

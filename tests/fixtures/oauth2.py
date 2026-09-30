@@ -4,13 +4,16 @@
 import base64
 import json
 import re
+from collections.abc import Awaitable, Callable
 from datetime import datetime, UTC
 from typing import Annotated, cast
 from urllib.parse import parse_qs, urlparse
+from uuid import UUID
 
 import httpx
+from app.core.errors.common import ForbiddenOperationError, UnauthorizedError
 from app.db.models.oauth2_client import OAuth2ClientDB
-from app.db.models.oauth2_token_pair import OAuth2TokenPairDB
+from app.db.models.oauth2_token_state import OAuth2TokenStateDB
 from app.db.models.organization import OrganizationDB
 from app.db.models.organization_membership import OrganizationMembershipDB
 from app.db.models.user import UserDB, UserEmailDB
@@ -18,21 +21,60 @@ from app.identity.users.enums import UserEmailStatus
 from app.oauth2.authorization.code import create_s256_code_challenge
 from app.password.pwdlib_hasher import PwdlibPasswordHasher
 from app.security.authentication import (
+    CurrentActorContextDep,
     CurrentUserContextDep,
-    OAuth2PrincipalContextDep,
 )
-from app.security.authorization import require_oauth2_scopes
-from app.security.dtos import OAuth2PrincipalContext
+from app.security.principals import BrowserUserPrincipalContext, OAuth2PrincipalContext
 from fastapi import Depends, FastAPI
 from sqlalchemy import func, insert, select
 
 from tests.fixtures.auth import issue_user_token, login_browser, UserCredentials
+from tests.identifiers import (
+    CONFIDENTIAL_CLIENT_ID,
+    deterministic_uuid,
+    MACHINE_CLIENT_ID,
+    OIDC_CLIENT_ID,
+    OTHER_PUBLIC_CLIENT_ID,
+    PUBLIC_CLIENT_ID,
+    PUBLIC_MACHINE_CLIENT_ID,
+)
 
 
 BEARER_TOKEN_TYPE = "bearer"  # noqa: S105
 CODE_VERIFIER = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~"
 SHA256_HEX_LENGTH = 64
 PASSWORD_HASHER = PwdlibPasswordHasher()
+
+
+async def _get_test_oauth2_principal(
+    principal_ctx: CurrentActorContextDep,
+) -> OAuth2PrincipalContext:
+    """Restrict a synthetic protected route to OAuth2 bearer principals."""
+    if isinstance(principal_ctx, BrowserUserPrincipalContext):
+        raise UnauthorizedError
+    return principal_ctx
+
+
+TestOAuth2PrincipalContextDep = Annotated[
+    OAuth2PrincipalContext,
+    Depends(_get_test_oauth2_principal),
+]
+
+
+def _require_oauth2_scopes(
+    *required_scopes: str,
+) -> Callable[[OAuth2PrincipalContext], Awaitable[OAuth2PrincipalContext]]:
+    """Build a scope dependency for synthetic protected test routes."""
+
+    async def dependency(
+        principal_ctx: TestOAuth2PrincipalContextDep,
+    ) -> OAuth2PrincipalContext:
+        """Reject a test principal that lacks a required scope."""
+        if set(required_scopes) - principal_ctx.scopes:
+            raise ForbiddenOperationError
+        return principal_ctx
+
+    return dependency
 
 
 async def create_oauth2_test_identity(app: FastAPI) -> tuple[int, int]:
@@ -77,13 +119,13 @@ async def create_oauth2_test_identity(app: FastAPI) -> tuple[int, int]:
 async def create_oauth2_test_client(
     app: FastAPI,
     *,
-    client_id: str = "client",
+    client_id: str = str(deterministic_uuid("client")),
 ) -> None:
     """Create the registered client referenced by OAuth2 persistence tests."""
     async with app.state.core_session_factory() as db_session:
         db_session.add(
             OAuth2ClientDB(
-                client_id=client_id,
+                client_id=UUID(client_id),
                 client_secret=None,
                 name="OAuth2 Store Client",
                 grant_types=["authorization_code", "refresh_token"],
@@ -128,7 +170,7 @@ def add_oauth2_principal_routes(app: FastAPI) -> None:
         dependencies=[],
     )
     async def required_principal_route(
-        principal_ctx: OAuth2PrincipalContextDep,
+        principal_ctx: TestOAuth2PrincipalContextDep,
     ) -> dict[str, object]:
         """Return the resolved principal shape."""
         return {
@@ -145,7 +187,7 @@ def add_oauth2_principal_routes(app: FastAPI) -> None:
     async def scoped_principal_route(
         principal_ctx: Annotated[
             OAuth2PrincipalContext,
-            Depends(require_oauth2_scopes("service:read")),
+            Depends(_require_oauth2_scopes("service:read")),
         ],
     ) -> dict[str, object]:
         """Return the resolved principal after scope enforcement."""
@@ -161,7 +203,7 @@ def add_oauth2_principal_routes(app: FastAPI) -> None:
     async def write_scoped_principal_route(
         principal_ctx: Annotated[
             OAuth2PrincipalContext,
-            Depends(require_oauth2_scopes("service:write")),
+            Depends(_require_oauth2_scopes("service:write")),
         ],
     ) -> dict[str, object]:
         """Return the resolved principal after write-scope enforcement."""
@@ -171,11 +213,13 @@ def add_oauth2_principal_routes(app: FastAPI) -> None:
         }
 
 
-async def count_token_pairs(app: FastAPI) -> int:
-    """Count persisted OAuth2 token pairs."""
+async def count_token_states(app: FastAPI) -> int:
+    """Count persisted OAuth2 token states."""
     async with app.state.core_session_factory() as db_session:
         return int(
-            await db_session.scalar(select(func.count()).select_from(OAuth2TokenPairDB))
+            await db_session.scalar(
+                select(func.count()).select_from(OAuth2TokenStateDB)
+            )
             or 0
         )
 
@@ -185,7 +229,7 @@ async def create_public_authorization_code_client(app: FastAPI) -> None:
     async with app.state.core_session_factory() as db_session:
         db_session.add(
             OAuth2ClientDB(
-                client_id="public-client",
+                client_id=PUBLIC_CLIENT_ID,
                 client_secret=None,
                 name="Public Client",
                 grant_types=["authorization_code", "refresh_token"],
@@ -204,7 +248,7 @@ async def create_public_oidc_client(app: FastAPI) -> None:
     async with app.state.core_session_factory() as db_session:
         db_session.add(
             OAuth2ClientDB(
-                client_id="oidc-client",
+                client_id=OIDC_CLIENT_ID,
                 client_secret=None,
                 name="OIDC Client",
                 grant_types=["authorization_code", "refresh_token"],
@@ -224,7 +268,7 @@ async def create_confidential_authorization_code_client(app: FastAPI) -> str:
     async with app.state.core_session_factory() as db_session:
         db_session.add(
             OAuth2ClientDB(
-                client_id="confidential-client",
+                client_id=CONFIDENTIAL_CLIENT_ID,
                 client_secret=PASSWORD_HASHER.hash(raw_secret),
                 name="Confidential Client",
                 grant_types=["authorization_code", "refresh_token"],
@@ -243,7 +287,7 @@ async def create_other_public_client(app: FastAPI) -> None:
     async with app.state.core_session_factory() as db_session:
         db_session.add(
             OAuth2ClientDB(
-                client_id="other-public-client",
+                client_id=OTHER_PUBLIC_CLIENT_ID,
                 client_secret=None,
                 name="Other Public Client",
                 grant_types=["authorization_code", "refresh_token"],
@@ -263,7 +307,7 @@ async def create_confidential_machine_client(app: FastAPI) -> str:
     async with app.state.core_session_factory() as db_session:
         db_session.add(
             OAuth2ClientDB(
-                client_id="machine-client",
+                client_id=MACHINE_CLIENT_ID,
                 client_secret=PASSWORD_HASHER.hash(raw_secret),
                 name="Machine Client",
                 grant_types=["client_credentials"],
@@ -282,7 +326,7 @@ async def create_public_client_credentials_client(app: FastAPI) -> None:
     async with app.state.core_session_factory() as db_session:
         db_session.add(
             OAuth2ClientDB(
-                client_id="public-machine-client",
+                client_id=PUBLIC_MACHINE_CLIENT_ID,
                 client_secret=None,
                 name="Public Machine Client",
                 grant_types=["client_credentials"],
@@ -307,7 +351,7 @@ async def request_authorization_code(
     client: httpx.AsyncClient,
     *,
     login_response: httpx.Response | None = None,
-    client_id: str = "public-client",
+    client_id: str = str(PUBLIC_CLIENT_ID),
     redirect_uri: str = "https://client.example/callback",
     scope: str = "read",
     consent: str | None = "approve",

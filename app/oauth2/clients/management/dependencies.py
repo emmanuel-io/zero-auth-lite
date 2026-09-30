@@ -71,11 +71,13 @@ def get_oauth2_client_machine_organization_access_service(
 
 
 def get_oauth2_client_credential_rotation_service(
+    db_session: DbSessionDep,
     session_factory: DbSessionFactoryDep,
     password_hasher: PasswordHasherDep,
 ) -> OAuth2ClientCredentialRotationService:
     """Build the client credential service."""
     return OAuth2ClientCredentialRotationService(
+        db_session=db_session,
         session_factory=session_factory,
         password_hasher=password_hasher,
     )

@@ -29,6 +29,16 @@ class UserDB(Base, PublicIdMixin, CreatedAtMixin, UpdatedAtMixin):
     """SQLAlchemy model representing an application user."""
 
     __tablename__ = "user"
+    __table_args__ = (
+        CheckConstraint(
+            "instr(first_name, char(13)) = 0 AND instr(first_name, char(10)) = 0",
+            name="first_name_no_line_breaks",
+        ),
+        CheckConstraint(
+            "instr(last_name, char(13)) = 0 AND instr(last_name, char(10)) = 0",
+            name="last_name_no_line_breaks",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(
         Integer,
@@ -55,6 +65,11 @@ class UserDB(Base, PublicIdMixin, CreatedAtMixin, UpdatedAtMixin):
         default=True,
     )
     is_operator: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+    )
+    invitation_pending: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
         default=False,

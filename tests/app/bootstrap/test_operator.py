@@ -6,11 +6,12 @@ from app.bootstrap.settings import BootstrapSettings
 from app.db.models.organization import OrganizationDB
 from app.db.models.organization_membership import OrganizationMembershipDB
 from app.db.models.user import UserDB, UserEmailDB
-from app.identity.public_ids import format_organization_id
-from app.identity.users.enums import OrganizationUserRole
+from app.identity.users.enums import OrganizationMembershipRole
 from fastapi import FastAPI
 from pydantic import SecretStr
 from sqlalchemy import func, insert, select
+
+from tests.identifiers import format_public_id as format_organization_id
 
 
 pytestmark = pytest.mark.integration
@@ -60,7 +61,7 @@ async def test_bootstrap_creates_own_organization_when_display_names_collide(
 
     assert organization_count == EXPECTED_ORGANIZATION_COUNT_WITH_COLLISIONS
     user, membership = row
-    assert membership.role is OrganizationUserRole.ADMIN
+    assert membership.role is OrganizationMembershipRole.ADMIN
     assert user.is_operator
     assert "event=bootstrap_operator_created" in caplog.text
     assert "outcome=success" in caplog.text
@@ -69,7 +70,6 @@ async def test_bootstrap_creates_own_organization_when_display_names_collide(
         f"organization_id={format_organization_id(organization.public_id)}"
         in caplog.text
     )
-    assert f"organization_id={organization.public_id}" not in caplog.text
 
 
 @pytest.mark.asyncio

@@ -1,0 +1,1 @@
+"""Durable authentication-notification delivery."""

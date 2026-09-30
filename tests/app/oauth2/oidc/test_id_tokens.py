@@ -8,6 +8,8 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 from joserfc import jwt
 from joserfc.jwk import OKPKey
 
+from tests.identifiers import deterministic_uuid
+
 
 pytestmark = pytest.mark.unit
 
@@ -18,9 +20,9 @@ def test_id_token_contains_authentication_and_profile_claims() -> None:
     authenticated_at = datetime(2026, 1, 2, 3, 4, tzinfo=UTC)
 
     token = create_id_token(
-        subject="usr_001P018WN3AT0",
-        audience="client",
-        jwt_issuer="https://issuer.test",
+        subject=str(deterministic_uuid("user")),
+        audience=str(deterministic_uuid("client")),
+        issuer="https://issuer.test",
         lifetime_seconds=60,
         authenticated_at=authenticated_at,
         key=key,

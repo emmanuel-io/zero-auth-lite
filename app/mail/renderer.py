@@ -1,9 +1,15 @@
-"""Jinja rendering utilities for transactional email templates."""
+"""Jinja rendering utilities for authentication email templates."""
 
 from html.parser import HTMLParser
 from pathlib import Path
 
-from jinja2 import Environment, FileSystemLoader, select_autoescape, TemplateError
+from jinja2 import (
+    Environment,
+    FileSystemLoader,
+    select_autoescape,
+    StrictUndefined,
+    TemplateError,
+)
 
 from app.mail.errors import MailTemplateError
 
@@ -22,11 +28,7 @@ class _PlainTextHTMLParser(HTMLParser):
         self._parts: list[str] = []
 
     def handle_data(self, data: str) -> None:
-        """Collect text nodes from the parsed HTML.
-
-        Args:
-            data (str): Text content found by the HTML parser.
-        """
+        """Collect text nodes from the parsed HTML."""
         stripped = data.strip()
         if stripped:
             self._parts.append(stripped)
@@ -36,50 +38,31 @@ class _PlainTextHTMLParser(HTMLParser):
         tag: str,
         attrs: list[tuple[str, str | None]],
     ) -> None:
-        """Add spacing around block-level HTML tags.
-
-        Args:
-            tag (str): HTML tag name.
-            attrs (list[tuple[str, str | None]]): HTML attributes.
-        """
+        """Add spacing around block-level HTML tags."""
         del attrs
         if tag in {"br", "p", "div", "tr", "li", "h1", "h2", "h3"}:
             self._parts.append("\n")
 
     def text(self) -> str:
-        """Return collected plain text with compact blank lines.
-
-        Returns:
-            str: Plain-text representation of parsed HTML.
-        """
+        """Return collected plain text with compact blank lines."""
         lines = [line.strip() for line in " ".join(self._parts).splitlines()]
         return "\n".join(line for line in lines if line).strip()
 
 
 class EmailTemplateRenderer:
-    """Render transactional email templates from a filesystem directory."""
+    """Render authentication email templates from a filesystem directory."""
 
     def __init__(self, template_dir: Path | None = None) -> None:
-        """Initialize a renderer with the configured template directory.
-
-        Args:
-            template_dir (Path | None): Directory containing email templates.
-        """
+        """Initialize a renderer with the configured template directory."""
         self.template_dir = template_dir or DEFAULT_EMAIL_TEMPLATE_DIR
         self.environment = Environment(
             loader=FileSystemLoader(str(self.template_dir)),
             autoescape=select_autoescape(("html", "xml")),
+            undefined=StrictUndefined,
         )
 
     def render(self, template_name: str, context: dict[str, object]) -> str:
-        """Render a template with the provided context.
-
-        Args:
-            template_name (str): Template path relative to the email template root.
-            context (dict[str, object]): Values available inside the template.
-
-        Returns:
-            str: Rendered template output.
+        """Render a template with values from the provided context.
 
         Raises:
             MailTemplateError: If Jinja cannot load or render the template.
@@ -88,17 +71,10 @@ class EmailTemplateRenderer:
             template = self.environment.get_template(template_name)
             return template.render(**context)
         except TemplateError as exc:
-            raise MailTemplateError(str(exc)) from exc
+            raise MailTemplateError from exc
 
     def html_to_text(self, html: str) -> str:
-        """Create a plain-text fallback from HTML.
-
-        Args:
-            html (str): Rendered HTML content.
-
-        Returns:
-            str: Plain-text fallback content.
-        """
+        """Create a plain-text fallback from rendered HTML."""
         parser = _PlainTextHTMLParser()
         parser.feed(html)
         return parser.text()

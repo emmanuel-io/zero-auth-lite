@@ -1,7 +1,10 @@
 # OAuth2 And OIDC Discovery
 
-Metadata URLs and every endpoint URL in metadata are derived from the
-configured absolute HTTP(S) issuer, not from an incoming Host header.
+The configured absolute HTTP(S) issuer supplies the public origin for metadata
+endpoint URLs; an incoming Host header never does. Endpoint paths come from the
+canonical named application routes and are not nested below an issuer path. The
+issuer path is used only to construct the two standards-defined `.well-known`
+discovery paths.
 
 For issuer `https://auth.example`, canonical metadata lives at:
 
@@ -17,6 +20,10 @@ paths differently:
 /.well-known/oauth-authorization-server/oauth2
 /oauth2/.well-known/openid-configuration
 ```
+
+For example, with issuer `https://auth.example/tenant`, an enabled token endpoint
+is advertised as `https://auth.example/oauth2/token`: `/oauth2/token` is the
+canonical endpoint route, independently of the `/tenant` issuer path.
 
 Metadata advertises only enabled grants and implemented client authentication
 methods. PKCE advertises only `S256`; password, implicit, and hybrid flows are

@@ -4,20 +4,26 @@ from datetime import datetime, timedelta, UTC
 
 import app.browser_sessions.authentication as browser_authentication
 import pytest
-from app.browser_sessions.authentication import SessionAuthenticationService
+from app.browser_sessions.authentication import BrowserSessionAuthenticationService
 from app.browser_sessions.dtos import (
-    SessionCreateDTO,
-    SessionReadDTO,
+    BrowserSessionCreateDTO,
+    BrowserSessionReadDTO,
 )
+from app.browser_sessions.enums import BrowserSessionRevocationReason
 from app.browser_sessions.errors import (
+    BrowserSessionInvalidError,
     InvalidLoginCredentialsError,
-    SessionInvalidError,
 )
-from app.browser_sessions.hashing import hash_session_id, hash_session_metadata
-from app.browser_sessions.lifecycle import SessionLifecycleService
-from app.browser_sessions.revocation import SessionRevocationService
-from app.browser_sessions.settings import SessionSettings
+from app.browser_sessions.hashing import (
+    hash_session_id,
+    hash_session_ip,
+    hash_session_user_agent,
+)
+from app.browser_sessions.lifecycle import BrowserSessionLifecycleService
+from app.browser_sessions.revocation import BrowserSessionRevocationService
+from app.browser_sessions.settings import BrowserSessionSettings
 from app.db.models.browser_session import BrowserSessionDB
+from app.db.models.organization_membership import OrganizationMembershipDB
 from app.db.models.user import UserDB, UserEmailDB
 from app.identity.users.enums import UserEmailStatus
 from app.password.pwdlib_hasher import PwdlibPasswordHasher
@@ -29,7 +35,7 @@ from tests.fixtures.session import BrowserSessionFixture
 
 pytestmark = pytest.mark.integration
 
-SESSION_ID_HASH_SECRET = "test-session-id-hash-secret-with-more-than-32-bytes"  # noqa: S105
+SESSION_HASH_SECRET = "test-session-id-hash-secret-with-more-than-32-bytes"  # noqa: S105
 EXPECTED_MANAGED_SESSION_COUNT = 2
 PASSWORD_HASHER = PwdlibPasswordHasher()
 
@@ -40,9 +46,9 @@ def session_create(
     user_id: int,
     csrf: str,
     expires_at: datetime,
-) -> SessionCreateDTO:
+) -> BrowserSessionCreateDTO:
     """Return a complete session creation DTO for service tests."""
-    return SessionCreateDTO(
+    return BrowserSessionCreateDTO(
         stored_session_id=session_id,
         user_id=user_id,
         csrf=csrf,
@@ -55,37 +61,37 @@ def stored_session_id(raw_session_id: str) -> str:
     """Return the stored digest for a test session ID."""
     return hash_session_id(
         session_id=raw_session_id,
-        secret=SESSION_ID_HASH_SECRET,
+        secret=SESSION_HASH_SECRET,
     )
 
 
 def auth_service_for(
     session_fixture: BrowserSessionFixture,
-) -> SessionAuthenticationService:
+) -> BrowserSessionAuthenticationService:
     """Return an auth service with test settings."""
-    return SessionAuthenticationService(
+    return BrowserSessionAuthenticationService(
         password_hasher=PASSWORD_HASHER,
         db_session=session_fixture.db_session,
         session_factory=session_fixture.session_factory,
-        settings=SessionSettings(id_hash_secret=SESSION_ID_HASH_SECRET),
+        settings=BrowserSessionSettings(hash_secret=SESSION_HASH_SECRET),
     )
 
 
 def lifecycle_service_for(
     session_fixture: BrowserSessionFixture,
-) -> SessionLifecycleService:
+) -> BrowserSessionLifecycleService:
     """Return a session lifecycle service with test settings."""
-    return SessionLifecycleService(
+    return BrowserSessionLifecycleService(
         db_session=session_fixture.db_session,
-        settings=SessionSettings(id_hash_secret=SESSION_ID_HASH_SECRET),
+        settings=BrowserSessionSettings(hash_secret=SESSION_HASH_SECRET),
     )
 
 
 async def load_and_slide(
-    service: SessionLifecycleService,
+    service: BrowserSessionLifecycleService,
     *,
     session_id: str,
-) -> tuple[SessionReadDTO, bool]:
+) -> tuple[BrowserSessionReadDTO, bool]:
     """Exercise explicit validation followed by lifecycle sliding."""
     session = await service.load_session(session_id=session_id)
     result = await service.slide_session(session=session)
@@ -94,11 +100,11 @@ async def load_and_slide(
 
 def revocation_service_for(
     session_fixture: BrowserSessionFixture,
-) -> SessionRevocationService:
+) -> BrowserSessionRevocationService:
     """Return a session revocation service with test settings."""
-    return SessionRevocationService(
+    return BrowserSessionRevocationService(
         db_session=session_fixture.db_session,
-        settings=SessionSettings(id_hash_secret=SESSION_ID_HASH_SECRET),
+        settings=BrowserSessionSettings(hash_secret=SESSION_HASH_SECRET),
     )
 
 
@@ -108,12 +114,12 @@ async def test_login_uses_injected_session_ttl(
     verified_user_credentials: UserCredentials,
 ) -> None:
     """Assert login session expiry is derived from injected settings."""
-    session_settings = SessionSettings(
-        id_hash_secret=SESSION_ID_HASH_SECRET,
+    session_settings = BrowserSessionSettings(
+        hash_secret=SESSION_HASH_SECRET,
         ttl_seconds=123,
         slide_seconds=60,
     )
-    auth_service = SessionAuthenticationService(
+    auth_service = BrowserSessionAuthenticationService(
         password_hasher=PASSWORD_HASHER,
         db_session=session_fixture.db_session,
         session_factory=session_fixture.session_factory,
@@ -127,7 +133,7 @@ async def test_login_uses_injected_session_ttl(
     )
 
     persisted_session = await session_fixture.read(
-        session_id=stored_session_id(login.session)
+        session_id=stored_session_id(login.raw_session_id)
     )
 
     assert persisted_session is not None
@@ -149,7 +155,7 @@ async def test_login_rejects_a_password_changed_during_verification(
         *,
         password: str,
         password_hash: str,
-    ) -> bool:
+    ) -> tuple[bool, str | None]:
         _ = password, password_hash
         async with session_fixture.session_factory.begin() as concurrent_session:
             await concurrent_session.execute(
@@ -168,11 +174,11 @@ async def test_login_rejects_a_password_changed_during_verification(
                     hashed_password="concurrently-changed-password-hash"  # noqa: S106
                 )
             )
-        return True
+        return True, "replacement-password-hash"
 
     monkeypatch.setattr(
         browser_authentication,
-        "verify_password",
+        "verify_and_update_password",
         change_password_then_accept,
     )
 
@@ -184,6 +190,117 @@ async def test_login_rejects_a_password_changed_during_verification(
 
     session_id = await session_fixture.db_session.scalar(select(BrowserSessionDB.id))
     assert session_id is None
+
+
+@pytest.mark.asyncio
+async def test_login_rejects_an_email_promoted_during_verification(
+    session_fixture: BrowserSessionFixture,
+    verified_user_credentials: UserCredentials,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Do not create a session for an address replaced concurrently."""
+    replacement_email = "concurrent-email@example.com"
+    async with session_fixture.session_factory.begin() as setup_session:
+        user_id = await setup_session.scalar(
+            select(UserEmailDB.user_id).where(
+                UserEmailDB.normalized_email == verified_user_credentials.email.lower(),
+                UserEmailDB.status == UserEmailStatus.CURRENT,
+            )
+        )
+        assert user_id is not None
+        setup_session.add(
+            UserEmailDB(
+                user_id=user_id,
+                email=replacement_email,
+                normalized_email=replacement_email,
+                status=UserEmailStatus.PENDING,
+            )
+        )
+
+    async def promote_email_then_accept(
+        _password_hasher: object,
+        *,
+        password: str,
+        password_hash: str,
+    ) -> tuple[bool, str | None]:
+        _ = password, password_hash
+        promoted_at = datetime.now(UTC)
+        async with session_fixture.session_factory.begin() as concurrent_session:
+            await concurrent_session.execute(
+                update(UserEmailDB)
+                .where(
+                    UserEmailDB.user_id == user_id,
+                    UserEmailDB.status == UserEmailStatus.CURRENT,
+                )
+                .values(
+                    status=UserEmailStatus.RETIRED,
+                    retired_at=promoted_at,
+                )
+            )
+            await concurrent_session.execute(
+                update(UserEmailDB)
+                .where(
+                    UserEmailDB.user_id == user_id,
+                    UserEmailDB.status == UserEmailStatus.PENDING,
+                )
+                .values(
+                    status=UserEmailStatus.CURRENT,
+                    verified_at=promoted_at,
+                )
+            )
+        return True, None
+
+    monkeypatch.setattr(
+        browser_authentication,
+        "verify_and_update_password",
+        promote_email_then_accept,
+    )
+
+    with pytest.raises(InvalidLoginCredentialsError):
+        await auth_service_for(session_fixture).login(
+            email=verified_user_credentials.email,
+            password=verified_user_credentials.password,
+        )
+
+    session_id = await session_fixture.db_session.scalar(select(BrowserSessionDB.id))
+    assert session_id is None
+
+
+@pytest.mark.asyncio
+async def test_login_conditionally_upgrades_the_password_hash(
+    session_fixture: BrowserSessionFixture,
+    verified_user_credentials: UserCredentials,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Persist a provider-requested hash upgrade with the new session."""
+    replacement_hash = "replacement-password-hash"
+
+    async def accept_with_upgrade(
+        _password_hasher: object,
+        *,
+        password: str,
+        password_hash: str,
+    ) -> tuple[bool, str | None]:
+        _ = password, password_hash
+        return True, replacement_hash
+
+    monkeypatch.setattr(
+        browser_authentication,
+        "verify_and_update_password",
+        accept_with_upgrade,
+    )
+
+    await auth_service_for(session_fixture).login(
+        email=verified_user_credentials.email,
+        password=verified_user_credentials.password,
+    )
+
+    persisted_hash = await session_fixture.db_session.scalar(
+        select(UserDB.hashed_password).join(
+            UserEmailDB, UserEmailDB.user_id == UserDB.id
+        )
+    )
+    assert persisted_hash == replacement_hash
 
 
 @pytest.mark.asyncio
@@ -204,17 +321,17 @@ async def test_login_hashes_optional_metadata(
     )
 
     persisted_session = await session_fixture.read(
-        session_id=stored_session_id(login.session)
+        session_id=stored_session_id(login.raw_session_id)
     )
 
     assert persisted_session is not None
-    assert persisted_session.ip_hash == hash_session_metadata(
+    assert persisted_session.ip_hash == hash_session_ip(
         value=source_ip,
-        secret=SESSION_ID_HASH_SECRET,
+        secret=SESSION_HASH_SECRET,
     )
-    assert persisted_session.user_agent_hash == hash_session_metadata(
+    assert persisted_session.user_agent_hash == hash_session_user_agent(
         value=user_agent,
-        secret=SESSION_ID_HASH_SECRET,
+        secret=SESSION_HASH_SECRET,
     )
 
 
@@ -224,12 +341,12 @@ async def test_login_session_limit_preserves_new_session(
     verified_user_credentials: UserCredentials,
 ) -> None:
     """Keep the session returned to the browser when enforcing the limit."""
-    auth_service = SessionAuthenticationService(
+    auth_service = BrowserSessionAuthenticationService(
         password_hasher=PASSWORD_HASHER,
         db_session=session_fixture.db_session,
         session_factory=session_fixture.session_factory,
-        settings=SessionSettings(
-            id_hash_secret=SESSION_ID_HASH_SECRET,
+        settings=BrowserSessionSettings(
+            hash_secret=SESSION_HASH_SECRET,
             max_sessions_per_user=1,
         ),
     )
@@ -253,8 +370,61 @@ async def test_login_session_limit_preserves_new_session(
         )
     )
 
-    assert stored_session_id(first.session) not in session_ids
-    assert session_ids == [stored_session_id(second.session)]
+    assert stored_session_id(first.raw_session_id) not in session_ids
+    assert session_ids == [stored_session_id(second.raw_session_id)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expiry_field", ["expires_at", "absolute_expires_at"])
+async def test_login_session_limit_ignores_expired_rows(
+    session_fixture: BrowserSessionFixture,
+    verified_user_credentials: UserCredentials,
+    expiry_field: str,
+) -> None:
+    """Keep an older active session when a newer retained row has expired."""
+    auth_service = BrowserSessionAuthenticationService(
+        password_hasher=PASSWORD_HASHER,
+        db_session=session_fixture.db_session,
+        session_factory=session_fixture.session_factory,
+        settings=BrowserSessionSettings(
+            hash_secret=SESSION_HASH_SECRET,
+            max_sessions_per_user=2,
+        ),
+    )
+    active = await auth_service.login(
+        email=verified_user_credentials.email,
+        password=verified_user_credentials.password,
+    )
+    expired = await auth_service.login(
+        email=verified_user_credentials.email,
+        password=verified_user_credentials.password,
+    )
+    await session_fixture.db_session.execute(
+        update(BrowserSessionDB)
+        .where(BrowserSessionDB.id == stored_session_id(expired.raw_session_id))
+        .values(**{expiry_field: datetime.now(UTC) - timedelta(minutes=1)})
+    )
+    newest = await auth_service.login(
+        email=verified_user_credentials.email,
+        password=verified_user_credentials.password,
+    )
+
+    session_ids = set(
+        await session_fixture.db_session.scalars(
+            select(BrowserSessionDB.id)
+            .join(UserEmailDB, UserEmailDB.user_id == BrowserSessionDB.user_id)
+            .where(
+                UserEmailDB.normalized_email == verified_user_credentials.email.lower(),
+                UserEmailDB.status == UserEmailStatus.CURRENT,
+            )
+        )
+    )
+
+    assert session_ids == {
+        stored_session_id(active.raw_session_id),
+        stored_session_id(expired.raw_session_id),
+        stored_session_id(newest.raw_session_id),
+    }
 
 
 @pytest.mark.asyncio
@@ -336,12 +506,12 @@ async def test_load_and_slide_session_uses_injected_settings(
     session_store_user_id: int,
 ) -> None:
     """Assert sliding expiry uses injected slide and TTL settings."""
-    session_settings = SessionSettings(
-        id_hash_secret=SESSION_ID_HASH_SECRET,
+    session_settings = BrowserSessionSettings(
+        hash_secret=SESSION_HASH_SECRET,
         ttl_seconds=300,
         slide_seconds=120,
     )
-    auth_service = SessionLifecycleService(
+    auth_service = BrowserSessionLifecycleService(
         db_session=session_fixture.db_session,
         settings=session_settings,
     )
@@ -384,12 +554,12 @@ async def test_load_and_slide_session_skips_patch_before_slide_window(
     session_store_user_id: int,
 ) -> None:
     """Assert sessions outside the slide window keep their original expiry."""
-    session_settings = SessionSettings(
-        id_hash_secret=SESSION_ID_HASH_SECRET,
+    session_settings = BrowserSessionSettings(
+        hash_secret=SESSION_HASH_SECRET,
         ttl_seconds=300,
         slide_seconds=120,
     )
-    auth_service = SessionLifecycleService(
+    auth_service = BrowserSessionLifecycleService(
         db_session=session_fixture.db_session,
         settings=session_settings,
     )
@@ -433,13 +603,13 @@ async def test_load_and_slide_session_skips_noop_at_absolute_expiry(
     session_store_user_id: int,
 ) -> None:
     """Avoid repeated writes when absolute expiry prevents a slide."""
-    session_settings = SessionSettings(
-        id_hash_secret=SESSION_ID_HASH_SECRET,
+    session_settings = BrowserSessionSettings(
+        hash_secret=SESSION_HASH_SECRET,
         ttl_seconds=300,
         absolute_ttl_seconds=300,
         slide_seconds=120,
     )
-    auth_service = SessionLifecycleService(
+    auth_service = BrowserSessionLifecycleService(
         db_session=session_fixture.db_session,
         settings=session_settings,
     )
@@ -486,12 +656,12 @@ async def test_load_and_slide_session_records_stale_activity_without_sliding(
     session_store_user_id: int,
 ) -> None:
     """Throttle activity writes independently from expiry sliding."""
-    session_settings = SessionSettings(
-        id_hash_secret=SESSION_ID_HASH_SECRET,
+    session_settings = BrowserSessionSettings(
+        hash_secret=SESSION_HASH_SECRET,
         ttl_seconds=300,
         slide_seconds=120,
     )
-    auth_service = SessionLifecycleService(
+    auth_service = BrowserSessionLifecycleService(
         db_session=session_fixture.db_session,
         settings=session_settings,
     )
@@ -567,18 +737,18 @@ async def test_session_management_methods_delegate_to_store(
     )
     revoked_one = await auth_service.logout(session_id=session_id)
     revoked_by_public_id = await auth_service.revoke_user_session_by_public_id(
-        public_id=sessions[0].public_id,
+        public_id=sessions.items[0].public_id,
         user_id=session_store_user_id,
-        reason="unit_test",
+        reason=BrowserSessionRevocationReason.USER_REVOKED,
     )
     missing_public_id_revoked = await auth_service.revoke_user_session_by_public_id(
         public_id=999999,
         user_id=session_store_user_id,
     )
     revoked_all = await auth_service.revoke_user_sessions(user_id=session_store_user_id)
-    cleaned = await auth_service.cleanup_expired_sessions()
+    cleaned = await auth_service.cleanup_terminal_sessions()
 
-    assert len(sessions) == EXPECTED_MANAGED_SESSION_COUNT
+    assert len(sessions.items) == sessions.total == EXPECTED_MANAGED_SESSION_COUNT
     assert revoked_one is True
     assert revoked_by_public_id is True
     assert missing_public_id_revoked is False
@@ -587,7 +757,7 @@ async def test_session_management_methods_delegate_to_store(
 
 
 @pytest.mark.asyncio
-async def test_cleanup_expired_sessions_respects_batch_size(
+async def test_cleanup_terminal_sessions_respects_batch_size(
     session_fixture: BrowserSessionFixture,
     session_store_user_id: int,
 ) -> None:
@@ -601,16 +771,69 @@ async def test_cleanup_expired_sessions_respects_batch_size(
                 expires_at=datetime.now(UTC) - timedelta(minutes=5),
             )
         )
-    service = SessionRevocationService(
+    service = BrowserSessionRevocationService(
         db_session=session_fixture.db_session,
-        settings=SessionSettings(
-            id_hash_secret=SESSION_ID_HASH_SECRET,
+        settings=BrowserSessionSettings(
+            hash_secret=SESSION_HASH_SECRET,
             cleanup_batch_size=1,
         ),
     )
 
-    assert await service.cleanup_expired_sessions() == 1
-    assert await service.cleanup_expired_sessions() == 1
+    assert await service.cleanup_terminal_sessions() == 1
+    assert await service.cleanup_terminal_sessions() == 1
+
+
+@pytest.mark.asyncio
+async def test_delete_organization_sessions_deletes_browser_sessions(
+    session_fixture: BrowserSessionFixture,
+    session_store_user_id: int,
+) -> None:
+    """Delete browser sessions through an explicit organization boundary."""
+    session_id = stored_session_id("organization-browser-session")
+    await session_fixture.create(
+        dto=session_create(
+            session_id=session_id,
+            user_id=session_store_user_id,
+            csrf="organization-csrf",
+            expires_at=datetime.now(UTC) + timedelta(minutes=5),
+        )
+    )
+    membership = await session_fixture.db_session.get(
+        OrganizationMembershipDB, session_store_user_id
+    )
+    assert membership is not None
+
+    revocation_service = revocation_service_for(session_fixture)
+    deleted = await revocation_service.delete_organization_sessions(
+        organization_id=membership.organization_id,
+    )
+
+    assert deleted == 1
+    assert await session_fixture.read(session_id=session_id) is None
+
+
+@pytest.mark.asyncio
+async def test_delete_user_sessions_deletes_the_target_users_sessions(
+    session_fixture: BrowserSessionFixture,
+    session_store_user_id: int,
+) -> None:
+    """Delete browser sessions through an explicit user boundary."""
+    session_id = stored_session_id("target-user-browser-session")
+    await session_fixture.create(
+        dto=session_create(
+            session_id=session_id,
+            user_id=session_store_user_id,
+            csrf="target-user-csrf",
+            expires_at=datetime.now(UTC) + timedelta(minutes=5),
+        )
+    )
+
+    deleted = await revocation_service_for(session_fixture).delete_user_sessions(
+        user_id=session_store_user_id
+    )
+
+    assert deleted == 1
+    assert await session_fixture.read(session_id=session_id) is None
 
 
 @pytest.mark.asyncio
@@ -619,9 +842,9 @@ async def test_get_session_csrf_returns_token_for_valid_session(
     session_store_user_id: int,
 ) -> None:
     """Assert a valid raw session ID resolves its CSRF token."""
-    auth_service = SessionLifecycleService(
+    auth_service = BrowserSessionLifecycleService(
         db_session=session_fixture.db_session,
-        settings=SessionSettings(id_hash_secret=SESSION_ID_HASH_SECRET),
+        settings=BrowserSessionSettings(hash_secret=SESSION_HASH_SECRET),
     )
     session_id = "csrf-valid-session"
     csrf_value = "csrf-token"
@@ -643,12 +866,12 @@ async def test_get_session_csrf_rejects_missing_session(
     session_fixture: BrowserSessionFixture,
 ) -> None:
     """Assert missing sessions cannot expose CSRF tokens."""
-    auth_service = SessionLifecycleService(
+    auth_service = BrowserSessionLifecycleService(
         db_session=session_fixture.db_session,
-        settings=SessionSettings(id_hash_secret=SESSION_ID_HASH_SECRET),
+        settings=BrowserSessionSettings(hash_secret=SESSION_HASH_SECRET),
     )
 
-    with pytest.raises(SessionInvalidError):
+    with pytest.raises(BrowserSessionInvalidError):
         await auth_service.get_session_csrf(session_id="missing-session")
 
 
@@ -659,9 +882,9 @@ async def test_get_session_csrf_rejects_revoked_session(
     session_store_user_id: int,
 ) -> None:
     """Assert revoked sessions cannot expose CSRF tokens."""
-    auth_service = SessionLifecycleService(
+    auth_service = BrowserSessionLifecycleService(
         db_session=session_fixture.db_session,
-        settings=SessionSettings(id_hash_secret=SESSION_ID_HASH_SECRET),
+        settings=BrowserSessionSettings(hash_secret=SESSION_HASH_SECRET),
     )
     session_id = "csrf-revoked-session"
     stored_id = stored_session_id(session_id)
@@ -675,7 +898,7 @@ async def test_get_session_csrf_rejects_revoked_session(
     )
     await session_fixture.revoke(session_id=stored_id, reason="test")
 
-    with pytest.raises(SessionInvalidError):
+    with pytest.raises(BrowserSessionInvalidError):
         await auth_service.get_session_csrf(session_id=session_id)
 
 
@@ -686,9 +909,9 @@ async def test_get_session_csrf_rejects_expired_session(
     session_store_user_id: int,
 ) -> None:
     """Assert expired sessions cannot expose CSRF tokens."""
-    auth_service = SessionLifecycleService(
+    auth_service = BrowserSessionLifecycleService(
         db_session=session_fixture.db_session,
-        settings=SessionSettings(id_hash_secret=SESSION_ID_HASH_SECRET),
+        settings=BrowserSessionSettings(hash_secret=SESSION_HASH_SECRET),
     )
     session_id = "csrf-expired-session"
     await session_fixture.create(
@@ -700,7 +923,7 @@ async def test_get_session_csrf_rejects_expired_session(
         )
     )
 
-    with pytest.raises(SessionInvalidError):
+    with pytest.raises(BrowserSessionInvalidError):
         await auth_service.get_session_csrf(session_id=session_id)
 
 
@@ -712,7 +935,7 @@ async def test_load_and_slide_session_rejects_missing_session(
     """Assert missing browser sessions cannot be loaded."""
     auth_service = lifecycle_service_for(session_fixture)
 
-    with pytest.raises(SessionInvalidError):
+    with pytest.raises(BrowserSessionInvalidError):
         await load_and_slide(
             auth_service,
             session_id="missing-session",
@@ -750,12 +973,12 @@ async def test_load_and_slide_session_rejects_revoked_or_expired_session(
         )
     )
 
-    with pytest.raises(SessionInvalidError):
+    with pytest.raises(BrowserSessionInvalidError):
         await load_and_slide(
             auth_service,
             session_id=revoked_session_id,
         )
-    with pytest.raises(SessionInvalidError):
+    with pytest.raises(BrowserSessionInvalidError):
         await load_and_slide(
             auth_service,
             session_id=expired_session_id,
@@ -767,7 +990,7 @@ def test_session_dtos_reject_naive_datetimes() -> None:
     naive_now = datetime(2026, 1, 1)  # noqa: DTZ001
 
     with pytest.raises(ValueError):  # noqa: PT011
-        SessionCreateDTO(
+        BrowserSessionCreateDTO(
             stored_session_id="session",
             user_id=1,
             csrf="csrf-token",

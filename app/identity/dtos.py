@@ -2,14 +2,14 @@
 
 from dataclasses import dataclass
 from datetime import datetime
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
 from app.identity.organizations.types import OrganizationName
-from app.identity.users.enums import OrganizationUserRole
+from app.identity.users.enums import OrganizationMembershipRole
 from app.identity.users.types import UserEmail, UserFirstName, UserLastName
 from app.password.validation import StrongPassword
-from app.public_ids import PublicId
 
 
 class RegistrationCreateDTO(BaseModel):
@@ -35,16 +35,18 @@ class IdentityUserDTO:
     """
 
     id: int
-    public_id: PublicId
+    public_id: UUID
     organization_id: int
-    organization_public_id: PublicId
+    organization_public_id: UUID
     email: str
     hashed_password: str
+    organization_name: str = ""
     first_name: str = ""
     last_name: str = ""
     pending_email: str | None = None
     is_active: bool = True
     email_verified: bool = False
+    invitation_pending: bool = False
     roles: tuple[str, ...] = ()
     sessions_invalid_before: datetime | None = None
 
@@ -54,7 +56,7 @@ class IdentityOrganizationDTO:
     """Organization fields shared by canonical identity workflows."""
 
     id: int
-    public_id: PublicId
+    public_id: UUID
     name: str
 
 
@@ -70,11 +72,11 @@ class IdentityDTO:
 class RegisteredUserDTO:
     """Safe registration result returned by the canonical server registration flow."""
 
-    id: str
-    organization_id: str
+    public_id: UUID
+    organization_public_id: UUID
     email: str
     first_name: str
     last_name: str
     is_active: bool
-    role: OrganizationUserRole
+    role: OrganizationMembershipRole
     email_verified: bool

@@ -1,24 +1,26 @@
 """HTTP schemas for current-organization user administration routes."""
 
-from datetime import datetime
-from typing import Annotated
+from datetime import date, datetime
+from typing import Annotated, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
+from fastapi import Query
+from pydantic import BaseModel, ConfigDict, Field, model_validator, UUID4
 from pydantic.json_schema import SkipJsonSchema
 
-from app.api.schemas import reject_explicit_nulls
-from app.identity.public_ids import (
-    format_user_id,
-    USER_ID_PATTERN,
+from app.api.dependencies.date_ranges import validate_date_range
+from app.api.schemas import DEFAULT_PAGE_LIMIT_MAX, reject_explicit_nulls
+from app.identity.users.criteria import (
+    OrganizationMembershipRoleFilter,
+    OrganizationUserSort,
 )
-from app.identity.users.enums import OrganizationUserRole
+from app.identity.users.enums import OrganizationMembershipRole
+from app.identity.users.specs import UserSpecs
 from app.identity.users.types import UserEmail, UserFirstName, UserLastName
 from app.password.validation import (
     MAX_PASSWORD_LENGTH,
     MIN_PASSWORD_LENGTH,
     StrongPassword,
 )
-from app.public_ids import PublicId
 
 
 class OrganizationUserCreateRequest(BaseModel):
@@ -42,8 +44,8 @@ class OrganizationUserCreateRequest(BaseModel):
     first_name: UserFirstName = ""
     last_name: UserLastName = ""
     is_active: bool = True
-    role: OrganizationUserRole = Field(
-        default=OrganizationUserRole.MEMBER,
+    role: OrganizationMembershipRole = Field(
+        default=OrganizationMembershipRole.MEMBER,
         description="Role held by the user in the current organization.",
     )
 
@@ -57,7 +59,7 @@ class OrganizationUserPatchRequest(BaseModel):
     first_name: UserFirstName | SkipJsonSchema[None] = None
     last_name: UserLastName | SkipJsonSchema[None] = None
     is_active: bool | SkipJsonSchema[None] = None
-    role: OrganizationUserRole | SkipJsonSchema[None] = None
+    role: OrganizationMembershipRole | SkipJsonSchema[None] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -75,35 +77,81 @@ class OrganizationUserReplaceRequest(BaseModel):
     first_name: UserFirstName
     last_name: UserLastName
     is_active: bool
-    role: OrganizationUserRole
+    role: OrganizationMembershipRole
 
 
 class OrganizationUserResponse(BaseModel):
     """Organization-user HTTP response."""
 
-    public_id: PublicId = Field(
-        serialization_alias="id",
-        json_schema_extra={"pattern": USER_ID_PATTERN},
-    )
+    public_id: UUID4 = Field(serialization_alias="id")
     email: Annotated[UserEmail, Field(description="User email")]
     pending_email: Annotated[
         UserEmail | None,
         Field(description="Pending email address awaiting verification"),
-    ] = None
+    ]
     first_name: Annotated[UserFirstName, Field(description="User first name")]
     last_name: Annotated[UserLastName, Field(description="User last name")]
     is_active: Annotated[bool, Field(description="User is active")]
     role: Annotated[
-        OrganizationUserRole,
+        OrganizationMembershipRole,
         Field(description="Role held by the user in the current organization."),
     ]
     email_verified: Annotated[
         bool, Field(description="Current email address is verified.")
-    ] = False
+    ]
     created_at: datetime
     updated_at: datetime
 
-    @field_serializer("public_id")
-    def serialize_public_id(self, value: PublicId) -> str:
-        """Serialize the public user identifier."""
-        return format_user_id(value)
+
+class OrganizationUserSearchQuery(BaseModel):
+    """Query parameters for searching organization users."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    q: str | None = Field(
+        default=None,
+        max_length=UserSpecs.SEARCH_QUERY_LENGTH_MAX,
+        description="Case-insensitive search across names and email addresses.",
+    )
+    sort: OrganizationUserSort | None = Field(
+        default=None,
+        description="Sort field; values prefixed with '-' use descending order.",
+    )
+    role: OrganizationMembershipRoleFilter | None = Field(
+        default=None, description="Organization membership role."
+    )
+    active: bool | None = Field(
+        default=None, description="Filter by active account state."
+    )
+    email_verified: bool | None = Field(
+        default=None, description="Filter by verified email state."
+    )
+    created_from: date | None = Field(
+        default=None, description="Include users created on or after this UTC date."
+    )
+    created_to: date | None = Field(
+        default=None, description="Include users created on or before this UTC date."
+    )
+    offset: int = Field(
+        default=0, ge=0, description="Number of matching users to skip."
+    )
+    limit: int = Field(
+        default=20,
+        ge=1,
+        le=DEFAULT_PAGE_LIMIT_MAX,
+        description="Maximum number of users to return.",
+    )
+
+    @model_validator(mode="after")
+    def validate_created_range(self) -> Self:
+        """Validate the creation date range.
+
+        Raises:
+            StartDateAfterEndDateError: If the start date is later than the end date.
+        """
+        validate_date_range(start=self.created_from, end=self.created_to)
+
+        return self
+
+
+OrganizationUserSearchQueryDep = Annotated[OrganizationUserSearchQuery, Query()]

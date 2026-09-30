@@ -24,33 +24,37 @@ from app.browser_sessions.dependencies import (
     get_public_optional_browser_user_context,
     get_strict_optional_browser_user_context,
 )
-from app.browser_sessions.dtos import SessionReadDTO, SessionSlideResultDTO
+from app.browser_sessions.dtos import (
+    BrowserSessionReadDTO,
+    BrowserSessionSlideResultDTO,
+)
 from app.browser_sessions.enums import CSRFPattern, CSRFTokenExposure
 from app.browser_sessions.errors import (
+    BrowserSessionInvalidError,
     CSRFCookieHeaderMismatchError,
     CSRFMissingCookieError,
     CSRFMissingHeaderError,
-    SessionInvalidError,
 )
 from app.browser_sessions.response_transport import (
+    BrowserSessionCookieMutation,
+    BrowserSessionCookieMutationKind,
+    BrowserSessionResponseTransportMiddleware,
     request_pre_session_csrf_cookie,
     request_session_cookie_clear_always,
     request_session_cookie_clear_on_success,
     request_session_cookie_refresh,
-    SessionCookieMutation,
-    SessionCookieMutationKind,
-    SessionResponseTransportMiddleware,
 )
-from app.browser_sessions.settings import CSRFSettings, SessionSettings
-from app.enums import Role
-from app.public_ids import PublicId
+from app.browser_sessions.settings import BrowserSessionSettings, CSRFSettings
+from app.security.roles import Role
 from fastapi import Response, status
 from starlette.requests import Request
 from starlette.types import Message, Receive, Scope, Send
 
+from tests.identifiers import PublicId
+
 
 if TYPE_CHECKING:
-    from app.browser_sessions.lifecycle import SessionLifecycleService
+    from app.browser_sessions.lifecycle import BrowserSessionLifecycleService
 
 
 pytestmark = pytest.mark.unit
@@ -99,6 +103,10 @@ class FakeUser:
     public_id: PublicId = field(default_factory=lambda: PublicId(101))
     organization_id: int = 7
     organization_public_id: PublicId = field(default_factory=lambda: PublicId(202))
+    email: str = "test@example.com"
+    first_name: str = "Test"
+    last_name: str = "User"
+    organization_name: str = "Test Organization"
     roles: frozenset[Role | str] = frozenset()
     is_active: bool = True
     email_verified: bool = True
@@ -119,12 +127,12 @@ class FakeBrowserAuthService:
         self.expiry_extended = expiry_extended
         self.slide_calls = 0
 
-    async def load_session(self, *, session_id: str) -> SessionReadDTO:
+    async def load_session(self, *, session_id: str) -> BrowserSessionReadDTO:
         """Return a valid session DTO."""
         now = datetime.now(UTC)
-        return SessionReadDTO(
+        return BrowserSessionReadDTO(
             stored_session_id=session_id,
-            public_id=1900000004123456,
+            public_id=PublicId(1900000004123456),
             user_id=11,
             csrf=CSRF_TOKEN,
             absolute_expires_at=now + timedelta(hours=1),
@@ -138,10 +146,12 @@ class FakeBrowserAuthService:
             user_agent_hash=None,
         )
 
-    async def slide_session(self, *, session: SessionReadDTO) -> SessionSlideResultDTO:
+    async def slide_session(
+        self, *, session: BrowserSessionReadDTO
+    ) -> BrowserSessionSlideResultDTO:
         """Record that identity validation completed before sliding."""
         self.slide_calls += 1
-        return SessionSlideResultDTO(
+        return BrowserSessionSlideResultDTO(
             session=session,
             expiry_extended=self.expiry_extended,
         )
@@ -149,7 +159,7 @@ class FakeBrowserAuthService:
     async def get_user_by_id(self, *, user_id: int) -> FakeUser | None:
         """Return the configured fake user."""
         _ = user_id
-        return self.user
+        return cast("FakeUser | None", self.user)
 
 
 class FakeSessionService:
@@ -158,7 +168,7 @@ class FakeSessionService:
     async def get_session_csrf(self, *, session_id: str) -> str:
         """Return the session token or reject an expired session."""
         if session_id == "expired":
-            raise SessionInvalidError
+            raise BrowserSessionInvalidError
         return "csrf-token"
 
 
@@ -197,9 +207,9 @@ class InvalidatedSessionLifecycle:
 class InvalidSessionLifecycle:
     """Reject a stale public-page session cookie."""
 
-    async def load_session(self, **_kwargs: object) -> SessionReadDTO:
+    async def load_session(self, **_kwargs: object) -> BrowserSessionReadDTO:
         """Reject the stored session as expired or revoked."""
-        raise SessionInvalidError
+        raise BrowserSessionInvalidError
 
 
 @pytest.mark.asyncio
@@ -209,7 +219,7 @@ async def test_optional_browser_user_context_refreshes_double_submit_cookies() -
         cookie_secure=False,
         pattern=CSRFPattern.DOUBLE_SUBMIT,
     )
-    session_settings = SessionSettings(cookie_secure=False)
+    session_settings = BrowserSessionSettings(cookie_secure=False)
 
     request = make_request(
         headers={
@@ -225,7 +235,7 @@ async def test_optional_browser_user_context_refreshes_double_submit_cookies() -
         request=request,
         lifecycle_service=FakeBrowserAuthService(
             FakeUser(roles=frozenset({Role.ORGANIZATION_ADMIN}))
-        ),  # type: ignore[arg-type]
+        ),  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
         csrf_settings=csrf_settings,
         session_settings=session_settings,
     )
@@ -233,8 +243,8 @@ async def test_optional_browser_user_context_refreshes_double_submit_cookies() -
     assert context is not None
     assert context.has_administrative_role is True
     mutation = request.state.session_cookie_mutation
-    assert isinstance(mutation, SessionCookieMutation)
-    assert mutation.kind == SessionCookieMutationKind.REFRESH
+    assert isinstance(mutation, BrowserSessionCookieMutation)
+    assert mutation.kind == BrowserSessionCookieMutationKind.REFRESH
     assert mutation.session_id == SESSION_COOKIE
     assert mutation.csrf_token == CSRF_TOKEN
     assert mutation.max_age_seconds is not None
@@ -245,14 +255,14 @@ async def test_optional_browser_user_context_skips_cookie_without_expiry_slide()
     None
 ):
     """Avoid Set-Cookie transport when only session activity is recorded."""
-    session_settings = SessionSettings(cookie_secure=False)
+    session_settings = BrowserSessionSettings(cookie_secure=False)
     request = make_request(
         method="GET",
         cookies={session_settings.cookie_name: SESSION_COOKIE},
     )
 
     lifecycle_service = cast(
-        "SessionLifecycleService",
+        "BrowserSessionLifecycleService",
         FakeBrowserAuthService(expiry_extended=False),
     )
     context = await get_strict_optional_browser_user_context(
@@ -271,7 +281,7 @@ async def test_optional_browser_user_context_skips_cookie_without_expiry_slide()
 async def test_optional_browser_user_context_rejects_double_submit_errors() -> None:
     """Assert double-submit browser context rejects missing and mismatched tokens."""
     csrf_settings = CSRFSettings(pattern=CSRFPattern.DOUBLE_SUBMIT)
-    session_settings = SessionSettings()
+    session_settings = BrowserSessionSettings()
 
     with pytest.raises(CSRFMissingHeaderError):
         await get_strict_optional_browser_user_context(
@@ -279,7 +289,7 @@ async def test_optional_browser_user_context_rejects_double_submit_errors() -> N
                 headers={"origin": "https://api.test"},
                 cookies={session_settings.cookie_name: SESSION_COOKIE},
             ),
-            lifecycle_service=FakeBrowserAuthService(),  # type: ignore[arg-type]
+            lifecycle_service=FakeBrowserAuthService(),  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
             csrf_settings=csrf_settings,
             session_settings=session_settings,
         )
@@ -293,7 +303,7 @@ async def test_optional_browser_user_context_rejects_double_submit_errors() -> N
                 },
                 cookies={session_settings.cookie_name: SESSION_COOKIE},
             ),
-            lifecycle_service=FakeBrowserAuthService(),  # type: ignore[arg-type]
+            lifecycle_service=FakeBrowserAuthService(),  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
             csrf_settings=csrf_settings,
             session_settings=session_settings,
         )
@@ -307,7 +317,7 @@ async def test_optional_browser_user_context_rejects_double_submit_errors() -> N
                     csrf_settings.cookie_name: CSRF_TOKEN,
                 },
             ),
-            lifecycle_service=FakeBrowserAuthService(),  # type: ignore[arg-type]
+            lifecycle_service=FakeBrowserAuthService(),  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
             csrf_settings=csrf_settings,
             session_settings=session_settings,
         )
@@ -324,16 +334,16 @@ async def test_optional_browser_user_context_rejects_invalid_users(
 ) -> None:
     """Assert missing and inactive users invalidate existing sessions."""
     _ = case
-    session_settings = SessionSettings()
+    session_settings = BrowserSessionSettings()
 
     lifecycle_service = FakeBrowserAuthService(user=user)
-    with pytest.raises(SessionInvalidError):
+    with pytest.raises(BrowserSessionInvalidError):
         await get_strict_optional_browser_user_context(
             request=make_request(
                 method="GET",
                 cookies={session_settings.cookie_name: SESSION_COOKIE},
             ),
-            lifecycle_service=lifecycle_service,  # type: ignore[arg-type]
+            lifecycle_service=lifecycle_service,  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
             csrf_settings=CSRFSettings(),
             session_settings=session_settings,
         )
@@ -343,7 +353,7 @@ async def test_optional_browser_user_context_rejects_invalid_users(
 @pytest.mark.asyncio
 async def test_sql_epoch_rejects_an_older_session() -> None:
     """The invalidation epoch remains a defense-in-depth revocation check."""
-    session_settings = SessionSettings(cookie_secure=False)
+    session_settings = BrowserSessionSettings(cookie_secure=False)
     request = make_request(
         headers={
             "origin": "https://api.test",
@@ -353,10 +363,10 @@ async def test_sql_epoch_rejects_an_older_session() -> None:
     )
 
     lifecycle_service = InvalidatedSessionLifecycle()
-    with pytest.raises(SessionInvalidError):
+    with pytest.raises(BrowserSessionInvalidError):
         await get_strict_optional_browser_user_context(
             request=request,
-            lifecycle_service=lifecycle_service,  # type: ignore[arg-type]
+            lifecycle_service=lifecycle_service,  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
             csrf_settings=CSRFSettings(cookie_secure=False),
             session_settings=session_settings,
         )
@@ -366,7 +376,7 @@ async def test_sql_epoch_rejects_an_older_session() -> None:
 @pytest.mark.asyncio
 async def test_public_optional_browser_context_clears_invalid_session() -> None:
     """Treat stale credentials as anonymous only at a public-page boundary."""
-    session_settings = SessionSettings(cookie_secure=False)
+    session_settings = BrowserSessionSettings(cookie_secure=False)
     csrf_settings = CSRFSettings(cookie_secure=False)
 
     request = make_request(
@@ -375,31 +385,31 @@ async def test_public_optional_browser_context_clears_invalid_session() -> None:
     )
     context = await get_public_optional_browser_user_context(
         request=request,
-        lifecycle_service=InvalidSessionLifecycle(),  # type: ignore[arg-type]
+        lifecycle_service=InvalidSessionLifecycle(),  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
         csrf_settings=csrf_settings,
         session_settings=session_settings,
     )
 
     assert context is None
     mutation = request.state.session_cookie_mutation
-    assert isinstance(mutation, SessionCookieMutation)
-    assert mutation.kind == SessionCookieMutationKind.CLEAR_ALWAYS
+    assert isinstance(mutation, BrowserSessionCookieMutation)
+    assert mutation.kind == BrowserSessionCookieMutationKind.CLEAR_ALWAYS
 
 
 @pytest.mark.parametrize(
     "clear_kind",
     [
-        SessionCookieMutationKind.CLEAR_ALWAYS,
-        SessionCookieMutationKind.CLEAR_ON_SUCCESS,
+        BrowserSessionCookieMutationKind.CLEAR_ALWAYS,
+        BrowserSessionCookieMutationKind.CLEAR_ON_SUCCESS,
     ],
 )
 def test_terminal_cookie_clear_cannot_be_replaced_by_a_refresh(
-    clear_kind: SessionCookieMutationKind,
+    clear_kind: BrowserSessionCookieMutationKind,
 ) -> None:
     """Keep each logout and invalid-session cleanup intent authoritative."""
     request = make_request(method="GET")
 
-    if clear_kind == SessionCookieMutationKind.CLEAR_ALWAYS:
+    if clear_kind == BrowserSessionCookieMutationKind.CLEAR_ALWAYS:
         request_session_cookie_clear_always(request)
     else:
         request_session_cookie_clear_on_success(request)
@@ -422,7 +432,7 @@ def test_pre_session_csrf_replaces_stale_authenticated_transport() -> None:
     request_pre_session_csrf_cookie(request, csrf_token=CSRF_TOKEN)
 
     mutation = request.state.session_cookie_mutation
-    assert mutation.kind == SessionCookieMutationKind.PRE_SESSION
+    assert mutation.kind == BrowserSessionCookieMutationKind.PRE_SESSION
     assert mutation.csrf_token == CSRF_TOKEN
 
 
@@ -434,7 +444,7 @@ def test_unconditional_clear_cannot_be_downgraded() -> None:
     request_session_cookie_clear_on_success(request)
 
     mutation = request.state.session_cookie_mutation
-    assert mutation.kind == SessionCookieMutationKind.CLEAR_ALWAYS
+    assert mutation.kind == BrowserSessionCookieMutationKind.CLEAR_ALWAYS
 
 
 @pytest.mark.parametrize(
@@ -451,7 +461,7 @@ def test_pre_session_transport_cannot_be_replaced_by_clear(
     clear_request(request)
 
     mutation = request.state.session_cookie_mutation
-    assert mutation.kind == SessionCookieMutationKind.PRE_SESSION
+    assert mutation.kind == BrowserSessionCookieMutationKind.PRE_SESSION
 
 
 @pytest.mark.asyncio
@@ -464,15 +474,15 @@ async def test_session_transport_replaces_conflicting_cookie_headers() -> None:
         response.set_cookie("unrelated", "preserved")
         await response(scope, receive, send)
 
-    middleware = SessionResponseTransportMiddleware(
+    middleware = BrowserSessionResponseTransportMiddleware(
         endpoint,
         csrf_settings=CSRFSettings(cookie_secure=False),
-        session_settings=SessionSettings(cookie_secure=False),
+        session_settings=BrowserSessionSettings(cookie_secure=False),
     )
     request = make_request(method="GET")
     request.scope["state"] = {}
-    request.state.session_cookie_mutation = SessionCookieMutation(
-        kind=SessionCookieMutationKind.REFRESH,
+    request.state.session_cookie_mutation = BrowserSessionCookieMutation(
+        kind=BrowserSessionCookieMutationKind.REFRESH,
         session_id="authoritative-value",
         csrf_token=CSRF_TOKEN,
         max_age_seconds=300,
@@ -514,22 +524,22 @@ async def test_session_transport_replaces_conflicting_cookie_headers() -> None:
                 if success_only and status_code >= status.HTTP_400_BAD_REQUEST
                 else (
                     "sessionid=session-cookie"
-                    if kind == SessionCookieMutationKind.REFRESH
+                    if kind == BrowserSessionCookieMutationKind.REFRESH
                     else "sessionid="
                 )
             ),
         )
         for kind, success_only in (
-            (SessionCookieMutationKind.REFRESH, True),
-            (SessionCookieMutationKind.CLEAR_ON_SUCCESS, True),
-            (SessionCookieMutationKind.CLEAR_ALWAYS, False),
-            (SessionCookieMutationKind.PRE_SESSION, False),
+            (BrowserSessionCookieMutationKind.REFRESH, True),
+            (BrowserSessionCookieMutationKind.CLEAR_ON_SUCCESS, True),
+            (BrowserSessionCookieMutationKind.CLEAR_ALWAYS, False),
+            (BrowserSessionCookieMutationKind.PRE_SESSION, False),
         )
         for status_code in (204, 303, 400, 500)
     ],
 )
 async def test_session_transport_applies_mutations_for_response_outcome(
-    kind: SessionCookieMutationKind,
+    kind: BrowserSessionCookieMutationKind,
     status_code: int,
     expected_cookie_fragment: str | None,
 ) -> None:
@@ -538,14 +548,14 @@ async def test_session_transport_applies_mutations_for_response_outcome(
     async def endpoint(scope: Scope, receive: Receive, send: Send) -> None:
         await Response(status_code=status_code)(scope, receive, send)
 
-    middleware = SessionResponseTransportMiddleware(
+    middleware = BrowserSessionResponseTransportMiddleware(
         endpoint,
         csrf_settings=CSRFSettings(cookie_secure=False),
-        session_settings=SessionSettings(cookie_secure=False),
+        session_settings=BrowserSessionSettings(cookie_secure=False),
     )
     request = make_request(method="GET")
     request.scope["state"] = {}
-    request.state.session_cookie_mutation = SessionCookieMutation(
+    request.state.session_cookie_mutation = BrowserSessionCookieMutation(
         kind=kind,
         session_id=SESSION_COOKIE,
         csrf_token=CSRF_TOKEN,
@@ -577,7 +587,9 @@ async def test_session_transport_applies_mutations_for_response_outcome(
 
 def test_session_cookie_helpers_set_read_and_delete_cookie() -> None:
     """Assert session helpers preserve configured cookie attributes."""
-    settings = SessionSettings(cookie_secure=False, cookie_domain=".example.test")
+    settings = BrowserSessionSettings(
+        cookie_secure=False, cookie_domain=".example.test"
+    )
     response = Response()
 
     set_session_cookie(
@@ -627,7 +639,7 @@ async def test_logout_csrf_helper_validates_live_double_submit_session() -> None
 
     await require_logout_csrf_if_session_is_valid(
         request=request,
-        lifecycle_service=FakeSessionService(),  # type: ignore[arg-type]
+        lifecycle_service=FakeSessionService(),  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
         csrf_settings=settings,
         session_id="live",
     )
@@ -640,7 +652,7 @@ async def test_logout_csrf_helper_validates_live_double_submit_session() -> None
                     settings.header_name: "csrf-token",
                 }
             ),
-            lifecycle_service=FakeSessionService(),  # type: ignore[arg-type]
+            lifecycle_service=FakeSessionService(),  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
             csrf_settings=settings,
             session_id="live",
         )
@@ -649,7 +661,11 @@ async def test_logout_csrf_helper_validates_live_double_submit_session() -> None
 @pytest.mark.asyncio
 async def test_current_browser_dependency_requires_a_user() -> None:
     """Assert browser dependency escalation returns 401 explicitly."""
-    with pytest.raises(SessionInvalidError) as missing:
+    with pytest.raises(BrowserSessionInvalidError) as missing:
         await get_current_browser_user_context(None)
     assert missing.value.status == status.HTTP_401_UNAUTHORIZED
-    assert missing.value.headers == {"WWW-Authenticate": "Session"}
+    assert missing.value.headers == {
+        "WWW-Authenticate": "Session",
+        "Cache-Control": "no-store",
+        "Pragma": "no-cache",
+    }

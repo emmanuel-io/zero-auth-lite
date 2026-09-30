@@ -7,7 +7,7 @@ INVITE_TOKEN = "invite-token-value"  # noqa: S105
 NEW_PASSWORD = "NewPass1!"  # noqa: S105
 
 
-class FakeAuthTokenConfirmationService:
+class FakeWorkflowTokenConfirmationService:
     """Capture token confirmation requests from HTTP adapters."""
 
     def __init__(self) -> None:

@@ -6,7 +6,6 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Form, Query, Request, status
 from starlette.responses import HTMLResponse, RedirectResponse
 
-from app.auth_tokens.dependencies import AuthTokenConfirmationServiceDep
 from app.browser_sessions.form_csrf import (
     get_or_create_pre_session_form_csrf,
     set_pre_session_form_csrf_cookie,
@@ -15,16 +14,21 @@ from app.browser_sessions.form_csrf import (
 from app.core.errors.base import AppError
 from app.db.dependencies import DbSessionDep
 from app.openapi_tags import BUILTIN_AUTH_UI_TAG
-from app.password.validation import (
-    PasswordInput,
-    validate_password_value,
-)
+from app.password.validation import validate_password_value
 from app.settings.dependencies import CSRFSettingsDep, SettingsDep
+from app.settings.ui import (
+    BUILTIN_INVITATION_PATH,
+    BUILTIN_PASSWORD_RESET_PATH,
+    BUILTIN_VERIFICATION_PATH,
+)
+from app.web.auth.inputs import PasswordForm, WorkflowTokenForm, WorkflowTokenQuery
 from app.web.redirects import workflow_completion_url
-from app.web.rendering import render_page
+from app.web.rendering import no_store_redirect, render_page
+from app.web.routes import BrowserPageRoute
+from app.workflow_tokens.dependencies import WorkflowTokenConfirmationServiceDep
 
 
-router = APIRouter(tags=[BUILTIN_AUTH_UI_TAG])
+router = APIRouter(tags=[BUILTIN_AUTH_UI_TAG], route_class=BrowserPageRoute)
 
 
 def _attach_page_csrf(
@@ -82,11 +86,11 @@ def _invalid_token_page(request: Request) -> HTMLResponse:
     )
 
 
-@router.get("/verify-email")
+@router.get(BUILTIN_VERIFICATION_PATH)
 async def verification_page(
     request: Request,
     csrf_settings: CSRFSettingsDep,
-    token: Annotated[str, Query(min_length=16)],
+    token: WorkflowTokenQuery,
 ) -> HTMLResponse:
     """Render the confirmation page linked from verification email."""
     csrf_token = get_or_create_pre_session_form_csrf(request, csrf_settings)
@@ -109,15 +113,15 @@ async def invalid_auth_link_page(request: Request) -> HTMLResponse:
     return _invalid_token_page(request)
 
 
-@router.post("/verify-email")
+@router.post(BUILTIN_VERIFICATION_PATH)
 async def submit_verification(  # noqa: PLR0913
     *,
     request: Request,
-    service: AuthTokenConfirmationServiceDep,
+    service: WorkflowTokenConfirmationServiceDep,
     db_session: DbSessionDep,
     csrf_settings: CSRFSettingsDep,
     settings: SettingsDep,
-    token: Annotated[str, Form(min_length=16)],
+    token: WorkflowTokenForm,
     csrf_token: Annotated[str | None, Form()] = None,
 ) -> RedirectResponse:
     """Consume a verification token through the canonical service."""
@@ -130,20 +134,20 @@ async def submit_verification(  # noqa: PLR0913
         await service.confirm_verification(token)
     except AppError:
         await db_session.rollback()
-        return RedirectResponse(
+        return no_store_redirect(
             "/auth-link-unavailable", status_code=status.HTTP_303_SEE_OTHER
         )
-    return RedirectResponse(
+    return no_store_redirect(
         workflow_completion_url(settings, notice="email-verified"),
         status_code=status.HTTP_303_SEE_OTHER,
     )
 
 
-@router.get("/reset-password")
+@router.get(BUILTIN_PASSWORD_RESET_PATH)
 async def reset_password_page(
     request: Request,
     csrf_settings: CSRFSettingsDep,
-    token: Annotated[str, Query(min_length=16)],
+    token: WorkflowTokenQuery,
     error: Annotated[str | None, Query()] = None,
 ) -> HTMLResponse:
     """Render the password-reset page linked from email."""
@@ -152,22 +156,22 @@ async def reset_password_page(
         csrf_settings=csrf_settings,
         token=token,
         title="Reset password",
-        action="/reset-password",
+        action=BUILTIN_PASSWORD_RESET_PATH,
         submit_label="Reset password",
         error="Choose a password that meets all requirements." if error else None,
     )
 
 
-@router.post("/reset-password")
+@router.post(BUILTIN_PASSWORD_RESET_PATH)
 async def submit_password_reset(  # noqa: PLR0913
     *,
     request: Request,
-    service: AuthTokenConfirmationServiceDep,
+    service: WorkflowTokenConfirmationServiceDep,
     db_session: DbSessionDep,
     csrf_settings: CSRFSettingsDep,
     settings: SettingsDep,
-    token: Annotated[str, Form(min_length=16)],
-    password: Annotated[PasswordInput, Form()],
+    token: WorkflowTokenForm,
+    password: PasswordForm,
     csrf_token: Annotated[str | None, Form()] = None,
 ) -> RedirectResponse:
     """Validate and apply a password reset through the canonical service."""
@@ -179,28 +183,29 @@ async def submit_password_reset(  # noqa: PLR0913
     try:
         validated_password = validate_password_value(password)
     except ValueError:
-        return RedirectResponse(
-            f"/reset-password?{urlencode({'token': token, 'error': 'invalid'})}",
+        query = urlencode({"token": token, "error": "invalid"})
+        return no_store_redirect(
+            f"{BUILTIN_PASSWORD_RESET_PATH}?{query}",
             status_code=status.HTTP_303_SEE_OTHER,
         )
     try:
         await service.reset_password(token=token, password=validated_password)
     except AppError:
         await db_session.rollback()
-        return RedirectResponse(
+        return no_store_redirect(
             "/auth-link-unavailable", status_code=status.HTTP_303_SEE_OTHER
         )
-    return RedirectResponse(
+    return no_store_redirect(
         workflow_completion_url(settings, notice="password-reset"),
         status_code=status.HTTP_303_SEE_OTHER,
     )
 
 
-@router.get("/accept-invite")
+@router.get(BUILTIN_INVITATION_PATH)
 async def accept_invite_page(
     request: Request,
     csrf_settings: CSRFSettingsDep,
-    token: Annotated[str, Query(min_length=16)],
+    token: WorkflowTokenQuery,
     error: Annotated[str | None, Query()] = None,
 ) -> HTMLResponse:
     """Render the invitation-acceptance page linked from email."""
@@ -209,22 +214,22 @@ async def accept_invite_page(
         csrf_settings=csrf_settings,
         token=token,
         title="Accept invitation",
-        action="/accept-invite",
+        action=BUILTIN_INVITATION_PATH,
         submit_label="Accept invitation",
         error="Choose a password that meets all requirements." if error else None,
     )
 
 
-@router.post("/accept-invite")
+@router.post(BUILTIN_INVITATION_PATH)
 async def submit_invite_acceptance(  # noqa: PLR0913
     *,
     request: Request,
-    service: AuthTokenConfirmationServiceDep,
+    service: WorkflowTokenConfirmationServiceDep,
     db_session: DbSessionDep,
     csrf_settings: CSRFSettingsDep,
     settings: SettingsDep,
-    token: Annotated[str, Form(min_length=16)],
-    password: Annotated[PasswordInput, Form()],
+    token: WorkflowTokenForm,
+    password: PasswordForm,
     csrf_token: Annotated[str | None, Form()] = None,
 ) -> RedirectResponse:
     """Validate and accept an invitation through the canonical service."""
@@ -236,18 +241,19 @@ async def submit_invite_acceptance(  # noqa: PLR0913
     try:
         validated_password = validate_password_value(password)
     except ValueError:
-        return RedirectResponse(
-            f"/accept-invite?{urlencode({'token': token, 'error': 'invalid'})}",
+        query = urlencode({"token": token, "error": "invalid"})
+        return no_store_redirect(
+            f"{BUILTIN_INVITATION_PATH}?{query}",
             status_code=status.HTTP_303_SEE_OTHER,
         )
     try:
         await service.accept_invite(token=token, password=validated_password)
     except AppError:
         await db_session.rollback()
-        return RedirectResponse(
+        return no_store_redirect(
             "/auth-link-unavailable", status_code=status.HTTP_303_SEE_OTHER
         )
-    return RedirectResponse(
+    return no_store_redirect(
         workflow_completion_url(settings, notice="invite-accepted"),
         status_code=status.HTTP_303_SEE_OTHER,
     )

@@ -1,14 +1,18 @@
 # Settings Reference
 
+This page is the canonical inventory of environment variables, configuration
+keys, defaults, and constraints. Guides repeat a setting only when it is needed
+to explain a concrete workflow or operational decision.
+
 Zero Auth Lite loads one immutable Pydantic settings snapshot when `create_app()` is
 called. It reads the optional `zero-auth-lite.toml` file from the working directory;
 `ZA_CONFIG_FILE` selects another file and requires that file to exist. TOML
-tables mirror the settings model, so `session.csrf.header_name` is written as
-`header_name` under `[session.csrf]`.
+tables mirror the settings model, so `browser_session.csrf.header_name` is written as
+`header_name` under `[browser_session.csrf]`.
 
 Environment overrides use the `ZA_` prefix and `__` between nested sections.
-For example, `session.csrf.header_name` becomes
-`ZA_SESSION__CSRF__HEADER_NAME`. Values are resolved in this order: explicit
+For example, `browser_session.csrf.header_name` becomes
+`ZA_BROWSER_SESSION__CSRF__HEADER_NAME`. Values are resolved in this order: explicit
 Python arguments, environment overrides, TOML, then model defaults. TOML uses
 native arrays, tables, booleans, integers, and floats; environment collections
 remain JSON-encoded strings.
@@ -34,10 +38,8 @@ file fails startup.
 | `ZA_APP__TRUSTED_PROXY_IPS` | empty | Valid IP addresses or CIDR networks trusted when resolving source addresses. Deployment mode rejects malformed entries. |
 | `ZA_DEFAULT_REDIRECT_URL` | unset | Trusted application URL used after a standalone interactive login when no protocol flow or internal return target takes priority. Deployment mode requires HTTPS and rejects local-only hosts. |
 | `ZA_DB_PATH` | `./data/zero-auth-lite.db` | Filesystem path to the canonical SQLite database. Alembic creates missing parent directories before applying migrations. |
-| `ZA_DB_ECHO` | `false` | Emit SQLAlchemy statements for local debugging. |
+| `ZA_DB_ECHO` | `false` | Emit SQLAlchemy statements for local debugging with bound parameter values hidden. |
 | `ZA_RUNTIME_DIR` | `/tmp/zero-auth-lite` | Ephemeral process state shared by workers on one host. |
-| `ZA_SNOWFLAKE_NODE_ID` | unset | Reserve one exact Snowflake node instead of allocating automatically. |
-| `ZA_CORS__ENABLED` | `true` | Install CORS middleware for configured browser origins. |
 | `ZA_CORS__ALLOWED_ORIGINS` | local origins | JSON array of exact browser origins accepted by CORS. |
 | `ZA_CORS__ALLOW_CREDENTIALS` | `true` | Allow browsers to include credentials on accepted cross-origin requests. |
 | `ZA_CORS__ALLOW_METHODS` | `["*"]` | JSON array of HTTP methods accepted by CORS preflight checks. |
@@ -47,7 +49,9 @@ file fails startup.
 `ZA_CORS__ALLOWED_ORIGINS` is always an explicit collection, even for one origin. For
 example: `ZA_CORS__ALLOWED_ORIGINS='["https://app.example"]'`. A bare
 string is rejected so the middleware cannot interpret it using substring
-membership.
+membership. Set it to `[]` for a same-origin server or a server without
+cross-origin browser clients; an empty collection leaves CORS middleware
+unmounted.
 
 SQLAlchemy is the canonical persistence baseline. Browser sessions, OAuth2
 state, authorization codes, identity, organization, client, and durable lifecycle
@@ -57,14 +61,6 @@ state remain in SQL.
 SQLAlchemy URL. Other database engines and remote database URLs are not part of
 the canonical server contract.
 
-Each process that generates public IDs reserves one of the 1024 Snowflake node
-identifiers. This includes ASGI workers and the outbox worker. Automatic
-allocation is safe only when they share the `snowflake/` subdirectory of
-`ZA_RUNTIME_DIR` on the same POSIX host. Setting
-`ZA_SNOWFLAKE_NODE_ID` makes one process reserve that exact node;
-starting another process with the same value fails instead of risking duplicate
-IDs.
-
 `ZA_RUNTIME_DIR` contains disposable process coordination state, not
 database or application data. A managed Linux service can set it to
 `/run/zero-auth-lite` after creating that directory with the service user's
@@ -72,41 +68,93 @@ ownership. Keep persistent state in the configured database or data volume
 instead.
 
 The local Compose stack pins Caddy to `172.30.0.10` and sets
-`ZA_APP__TRUSTED_PROXY_IPS` to `172.30.0.10/32`. Keep this trust list empty when the
-server has no reverse proxy. In other topologies, list only proxy addresses you
-control; trusting a broad network lets other peers forge the source metadata
-recorded with browser sessions through forwarded headers.
+`ZA_APP__TRUSTED_PROXY_IPS` to `172.30.0.10/32`. Keep this trust list empty when
+the server has no reverse proxy or receives traffic directly. In other
+topologies, list only proxy addresses you control; trusting a broad network
+lets other peers forge the source metadata recorded with browser sessions
+through forwarded headers. The canonical server commands disable Uvicorn
+proxy-header rewriting so this setting is the only forwarded-address trust
+boundary. Keep that server-layer rewriting disabled with custom launchers.
 
 `development` keeps the committed local defaults convenient for the direct and
 Compose examples. Set `ZA_APP__ENVIRONMENT=deployment` for any deployed
 server. That mode fails before startup while a checked-in session, OAuth2,
-workflow-token, or signing secret remains in use. It also requires explicit
-trusted hosts, secure session cookies when sessions are enabled, non-local
-browser and workflow topology, and mail delivery because verification,
-invitation, and password-recovery workflows depend on it.
+workflow-token, or signing secret remains in use by an enabled or reachable
+capability. It also requires explicit trusted hosts, secure session cookies when
+sessions are enabled, and a non-local browser topology. When identity workflows
+are reachable, it requires a non-local workflow topology and mail delivery
+because verification, invitation, and password-recovery workflows depend on it.
 `localhost`, subdomains ending in `.localhost`, and loopback IP addresses are
 rejected in issuer, email, cookie-domain, CORS, and CSRF settings. This
 validation is a minimum safety boundary, not a complete production-readiness
 claim.
 
-## Built-In Web UI
+## Application API
 
 | Environment variable | Default | Purpose |
 | --- | --- | --- |
-| `ZA_UI__AUTHENTICATION` | `builtin` | Select built-in authentication forms or the `external` JSON transport. Session-backed forms also require browser sessions. |
-| `ZA_UI__EXTERNAL_LOGIN_URL` | unset | Absolute external login-page URL used for interactive OAuth2 continuations in external authentication mode. |
-| `ZA_UI__OAUTH2_INTERACTION` | `builtin` | Control OAuth2 consent and device-code presentation independently; set `disabled` to remove it. |
+| `ZA_API__INTERACTIVE_AUTH_ROUTES_ENABLED` | `true` | Mount the interactive JSON adapters for sessions, identity workflows, and external OAuth2 interactions under `/api/v1`; does not control `/me`, `/organization`, or `/server`. |
 
-`ui.authentication` selects the built-in forms or external JSON transport.
-`ui.oauth2_interaction` independently selects OAuth2 consent and Device Code
-presentation. Setting it to `disabled` denies requests that need login or
-consent; it does not hand those decisions to an API client. Device Code cannot
-be enabled in that mode because verification requires the built-in UI.
+These interactive JSON adapters are independent from presentation. Their
+default allows API clients to use the identity workflows while the built-in
+forms remain available. Disable them only when the deployment exclusively uses
+server-rendered workflows. External identity, management-authentication, or
+OAuth2-interaction presentation requires these adapters. The authenticated
+`/me`, `/organization`, and `/server` APIs remain mounted either way.
+
+## Browser Presentation And Navigation
+
+| Environment variable | Default | Purpose |
+| --- | --- | --- |
+| `ZA_UI__IDENTITY_WORKFLOW_MODE` | `builtin` | Select `builtin`, `external`, or `disabled` identity-workflow presentation. |
+| `ZA_UI__MANAGEMENT_AUTHENTICATION` | `builtin` | Select built-in or external login/logout navigation for management pages. |
+| `ZA_UI__OAUTH2_INTERACTION` | `builtin` | Select `builtin`, `external`, or `disabled` OAuth2 interaction presentation. |
+| `ZA_UI__URLS__LOGIN` | `/login` | Login destination used by management navigation and workflow completion. |
+| `ZA_UI__URLS__LOGOUT` | `/logout` | Logout destination used by the Management UI. |
+| `ZA_UI__URLS__VERIFICATION` | local built-in verification URL | Exact destination placed in verification and email-change notifications. |
+| `ZA_UI__URLS__PASSWORD_RESET` | local built-in reset URL | Exact destination placed in password-reset notifications. |
+| `ZA_UI__URLS__INVITATION` | local built-in invitation URL | Exact destination placed in invitation notifications. |
+| `ZA_UI__URLS__AUTHORIZATION_INTERACTION` | `/login` | Browser entry point for Authorization Code interaction. |
+| `ZA_UI__URLS__AUTHORIZATION_CONSENT` | `/consent` | Built-in consent destination used after login. |
+| `ZA_UI__URLS__DEVICE_INTERACTION` | local built-in device URL | Verification URI returned to Device Code clients. |
+| `ZA_UI__ORGANIZATION_ADMIN_ENABLED` | `true` | Mount organization administration under `/management/organization`. |
+| `ZA_UI__OPERATOR_ENABLED` | `true` | Mount server-operator administration under `/management/operator`. |
+
+The three presentation modes are independent from each other and from the JSON
+identity-workflow transport.
+Setting identity-workflow presentation to `disabled` removes the built-in
+pages without claiming that an external frontend owns them. The JSON transport
+remains an independent decision. When that transport stays enabled, headless
+JSON clients own workflow completion and the verification, password-reset, and
+invitation destinations must be absolute HTTP(S) URLs. Self-registration
+requires at least one of these two transports.
+Built-in management mounts `/login` and `/logout`; external management requires
+absolute login and logout URLs and `api.interactive_auth_routes_enabled=true`.
+External OAuth2 interaction requires the interactive authentication API routes only while
+Authorization Code or Device Code is enabled, plus an absolute interaction URL
+for each enabled interactive grant. Setting the
+interaction mode to `disabled` denies Authorization Code requests that need
+login or consent, and is invalid while Device Code is enabled.
+The two administration toggles control HTML presentation only. They never
+remove `/api/v1/organization` or `/api/v1/server`. These APIs remain mounted
+when `browser_session.enabled=false` and use the Bearer authentication supported by
+each route; only the corresponding management HTML is omitted.
+Every component reads these configured URLs directly. Built-in modes validate
+absolute workflow and device URLs against `browser_session.csrf.public_origin`
+as well as their canonical paths, so server-issued tokens cannot be sent to a
+different origin. External modes accept their explicitly configured frontend
+origins. External presentation and headless JSON workflows require absolute
+HTTP(S) URLs. Credentials, query strings, and fragments are rejected
+because the server owns the appended `token`, `transaction_id`, `user_code`,
+`return_url`, and `notice` values.
+Deployment mode also requires HTTPS and rejects local-only hosts.
 The canonical [startup route matrix](routes.md#startup-route-matrix) lists the
 resulting surfaces and invalid combinations. See the
 [built-in authentication UI](../guides/builtin-authentication-ui.md) for the
-default server-rendered flow. In external mode, the server adds only opaque
-transaction or device continuation identifiers to `ui.external_login_url`; see
+default server-rendered flow. In external OAuth2 mode, the server adds only an
+opaque transaction or device continuation identifier to the corresponding
+configured URL; the Management UI independently uses its login and logout
+destinations. See
 the [external authentication UI](../guides/external-authentication-ui.md)
 contract for the complete resume flow.
 
@@ -120,17 +168,18 @@ encoded equivalent are never used as redirect destinations.
 
 | Environment variable | Default | Purpose |
 | --- | --- | --- |
-| `ZA_SESSION__ENABLED` | `true` | Mount browser-session routes and services. |
-| `ZA_SESSION__COOKIE_DOMAIN` | `zero-auth-lite.localhost` | Domain attribute shared by the browser-session cookie. Use an empty value for a host-only cookie. |
-| `ZA_SESSION__COOKIE_NAME` | `sessionid` | Opaque browser-session cookie name. |
-| `ZA_SESSION__COOKIE_SECURE` | `true` | Send the session cookie only over HTTPS. |
-| `ZA_SESSION__COOKIE_SAME_SITE` | `lax` | Browser cross-site cookie policy. |
-| `ZA_SESSION__TTL_SECONDS` | `28800` | Sliding session lifetime in seconds. |
-| `ZA_SESSION__ABSOLUTE_TTL_SECONDS` | `604800` | Seven-day maximum lifetime regardless of activity. |
-| `ZA_SESSION__CLEANUP_BATCH_SIZE` | `100` | Maximum expired or revoked sessions deleted by one cleanup operation. |
-| `ZA_SESSION__SLIDE_SECONDS` | `1800` | Remaining-lifetime threshold for extending SQL expiry and age threshold for a standalone persisted `last_seen_at` update. |
-| `ZA_SESSION__MAX_SESSIONS_PER_USER` | `10` | Concurrent session limit per user. |
-| `ZA_SESSION__ID_HASH_SECRET` | development value | Secret used for session lookup hashing. |
+| `ZA_BROWSER_SESSION__ENABLED` | `true` | Mount browser-session routes and services. |
+| `ZA_BROWSER_SESSION__COOKIE_DOMAIN` | `zero-auth-lite.localhost` | Domain attribute shared by the browser-session cookie. Use an empty value for a host-only cookie. |
+| `ZA_BROWSER_SESSION__COOKIE_NAME` | `sessionid` | Opaque browser-session cookie name. |
+| `ZA_BROWSER_SESSION__COOKIE_SECURE` | `true` | Send the session cookie only over HTTPS. |
+| `ZA_BROWSER_SESSION__COOKIE_SAME_SITE` | `lax` | Browser cross-site cookie policy. |
+| `ZA_BROWSER_SESSION__TTL_SECONDS` | `28800` | Sliding session lifetime in seconds. |
+| `ZA_BROWSER_SESSION__ABSOLUTE_TTL_SECONDS` | `604800` | Seven-day maximum lifetime regardless of activity. |
+| `ZA_BROWSER_SESSION__CLEANUP_BATCH_SIZE` | `100` | Maximum expired or revoked sessions deleted by one cleanup operation. |
+| `ZA_BROWSER_SESSION__CLEANUP_INTERVAL_SECONDS` | `3600` | Delay between automatic browser-session cleanup runs. |
+| `ZA_BROWSER_SESSION__SLIDE_SECONDS` | `1800` | Remaining-lifetime threshold for extending SQL expiry and age threshold for a standalone persisted `last_seen_at` update. |
+| `ZA_BROWSER_SESSION__MAX_SESSIONS_PER_USER` | `10` | Concurrent valid-session limit per user. |
+| `ZA_BROWSER_SESSION__HASH_SECRET` | development value | Root HMAC secret for session lookup, login-identifier, source-IP, and user-agent hashes. |
 
 `ttl_seconds` cannot exceed `absolute_ttl_seconds`, and `slide_seconds` cannot
 exceed `ttl_seconds`. Cookies for an existing session use its effective
@@ -138,37 +187,51 @@ remaining SQL lifetime rather than restarting the full configured TTL on every
 response. With the defaults, activity inside the sliding window renews the
 eight-hour session up to the seven-day absolute limit. `slide_seconds` also
 limits standalone `last_seen_at` persistence between expiry extensions.
-Expired-session cleanup deletes at most `cleanup_batch_size` rows per request;
-repeat it until it reports zero deletions. The explicit `status=all` operation
+Inactive-session cleanup deletes at most `cleanup_batch_size` expired or revoked
+rows per run. The worker repeats it automatically; an administrative request
+may also trigger one batch. The explicit `scope=all` operation
 remains intentionally unbounded.
+
+Session lookup, login identifiers, source IP addresses, and user agents use
+separate HMAC domains derived from `hash_secret`, so their digests cannot be
+correlated across contexts. Changing this secret invalidates every browser
+session and requires users to sign in again.
+Expired rows awaiting cleanup do not count toward `max_sessions_per_user` and
+cannot displace an older session that remains valid.
 Replace the development hash secret in every deployment.
+Cookie names must use HTTP token characters. The session cookie name must differ
+from both the configured CSRF cookie name and its `-form` variant used by
+anonymous server-rendered forms; ambiguous names are rejected at startup.
 
 ## CSRF
 
-CSRF settings are nested under `session.csrf`.
+CSRF settings are nested under `browser_session.csrf`.
 
 | Environment variable | Default | Purpose |
 | --- | --- | --- |
-| `ZA_SESSION__CSRF__PATTERN` | `synchronizer_token` | CSRF validation pattern. |
-| `ZA_SESSION__CSRF__ORIGIN_CHECK_ENABLED` | `true` | Validate browser request origins. |
-| `ZA_SESSION__CSRF__PUBLIC_ORIGIN` | local auth origin | External browser origin. |
-| `ZA_SESSION__CSRF__TRUSTED_ORIGINS` | local origins | Additional accepted origins. |
-| `ZA_SESSION__CSRF__HEADER_NAME` | `X-CSRF-Token` | Request and exposure header. |
-| `ZA_SESSION__CSRF__EXPOSE_TOKEN` | `header` | Expose CSRF state through `header` or a readable `cookie`. |
-| `ZA_SESSION__CSRF__COOKIE_DOMAIN` | `zero-auth-lite.localhost` | Domain attribute shared by the CSRF cookie. Use an empty value for a host-only cookie. |
-| `ZA_SESSION__CSRF__COOKIE_NAME` | `csrftoken` | CSRF cookie name when used. |
-| `ZA_SESSION__CSRF__COOKIE_SECURE` | `true` | Send the CSRF cookie only over HTTPS. |
-| `ZA_SESSION__CSRF__COOKIE_SAME_SITE` | `lax` | Browser cross-site policy for the CSRF cookie. |
-| `ZA_SESSION__CSRF__TTL_SECONDS` | `28800` | Stateless pre-session CSRF cookie lifetime. Authenticated CSRF cookies follow the browser-session lifetime. |
+| `ZA_BROWSER_SESSION__CSRF__PATTERN` | `synchronizer_token` | CSRF validation pattern. |
+| `ZA_BROWSER_SESSION__CSRF__ORIGIN_CHECK_ENABLED` | `true` | Validate browser request origins. |
+| `ZA_BROWSER_SESSION__CSRF__PUBLIC_ORIGIN` | local auth origin | External browser origin. |
+| `ZA_BROWSER_SESSION__CSRF__TRUSTED_ORIGINS` | local origins | Additional accepted origins. |
+| `ZA_BROWSER_SESSION__CSRF__HEADER_NAME` | `X-CSRF-Token` | Request and exposure header. |
+| `ZA_BROWSER_SESSION__CSRF__EXPOSE_TOKEN` | `header` | Expose CSRF state through `header` or a readable `cookie`. |
+| `ZA_BROWSER_SESSION__CSRF__COOKIE_DOMAIN` | `zero-auth-lite.localhost` | Domain attribute shared by the CSRF cookie. Use an empty value for a host-only cookie. |
+| `ZA_BROWSER_SESSION__CSRF__COOKIE_NAME` | `csrftoken` | CSRF cookie name when used. |
+| `ZA_BROWSER_SESSION__CSRF__COOKIE_SECURE` | `true` | Send the CSRF cookie only over HTTPS. |
+| `ZA_BROWSER_SESSION__CSRF__COOKIE_SAME_SITE` | `lax` | Browser cross-site policy for the CSRF cookie. |
+| `ZA_BROWSER_SESSION__CSRF__TTL_SECONDS` | `28800` | Stateless pre-session CSRF cookie lifetime. Authenticated CSRF cookies follow the browser-session lifetime. |
 
-The cookie domain, public origin, trusted origins, proxy behavior, and OAuth2
-issuer must describe the same external topology.
-When sessions are enabled, the configured CSRF header is automatically allowed
-by CORS. It is also exposed by CORS when CSRF exposure uses the header transport.
+In `deployment` mode, the public CSRF origin and OAuth2 issuer hosts must be
+accepted by `app.trusted_hosts`. Non-empty session and CSRF cookie domains must
+be valid DNS domains that cover the public CSRF origin host. CORS and trusted
+CSRF origins may still name a separate frontend host.
+When CORS middleware is mounted and sessions are enabled, the configured CSRF
+header is automatically allowed. It is also exposed when CSRF exposure uses the
+header transport.
 In `deployment` mode, startup requires both the session and CSRF cookies to be
-`Secure`, rejects local-only cookie domains, and requires CORS and CSRF origins
-to be exact, non-local absolute HTTPS origins. Separate frontend and
-identity-provider origins remain valid configurations.
+`Secure`, rejects local-only cookie domains, validates configured CORS origins,
+and requires CSRF origins to be exact, non-local absolute HTTPS origins.
+Separate frontend and identity-provider origins remain valid configurations.
 
 ## OAuth2 And OpenID Connect
 
@@ -182,12 +245,12 @@ identity-provider origins remain valid configurations.
 | `ZA_OAUTH2__DEVICE_CODE_ENABLED` | `true` | Enable device authorization and verification. |
 | `ZA_OAUTH2__OIDC_ENABLED` | `true` | Enable the OpenID Connect identity layer. |
 | `ZA_OAUTH2__JWKS_ENABLED` | `true` | Publish public signing keys. |
-| `ZA_OAUTH2__JWT_ISSUER` | local HTTPS auth origin | Exact public issuer identifier. |
-| `ZA_OAUTH2__JWT_AUDIENCE` | `zero-auth-lite-example-api` | Intended access-token audience. |
-| `ZA_OAUTH2__JWT_KEY_ID` | `local-dev-key` | Current signing key identifier. |
-| `ZA_OAUTH2__PRV_KEY_B64` | development key | Base64-encoded raw 32-byte Ed25519 private signing key. |
-| `ZA_OAUTH2__PUB_KEY_B64` | development key | Base64-encoded raw 32-byte Ed25519 public verification key matching the private key. |
-| `ZA_OAUTH2__PREVIOUS_PUBLIC_KEYS` | `[]` | JSON array of retained `{kid, pub_key_b64}` verification keys during rotation. |
+| `ZA_OAUTH2__ISSUER` | local HTTPS auth origin | Exact public issuer identifier. |
+| `ZA_OAUTH2__ACCESS_TOKEN_AUDIENCE` | `zero-auth-lite-example-api` | Intended access-token audience. |
+| `ZA_OAUTH2__SIGNING_KEY_ID` | `local-dev-key` | Current signing key identifier. |
+| `ZA_OAUTH2__SIGNING_PRIVATE_KEY_B64` | development key | Base64-encoded raw 32-byte Ed25519 private signing key. |
+| `ZA_OAUTH2__SIGNING_PUBLIC_KEY_B64` | development key | Base64-encoded raw 32-byte Ed25519 public verification key matching the private key. |
+| `ZA_OAUTH2__PREVIOUS_PUBLIC_KEYS` | `[]` | JSON array of retained `{kid, signing_public_key_b64}` verification keys during rotation. |
 | `ZA_OAUTH2__AUTHORIZATION_CODE_HASH_SECRET` | development value | HMAC secret used to hash authorization codes and browser authorization transactions. |
 | `ZA_OAUTH2__TOKEN_HASH_SECRET` | development value | HMAC secret used for persisted access, refresh, and device-token lookups. |
 | `ZA_OAUTH2__AUTHORIZATION_CODE_TTL_SECONDS` | `300` | Authorization-code and browser authorization-transaction lifetime. |
@@ -201,9 +264,13 @@ identity-provider origins remain valid configurations.
 
 OIDC requires authorization code, JWKS publication, a key ID, and browser
 sessions. Authorization code and device verification also require browser
-sessions. Device verification additionally requires the built-in UI because no
-external verification URL is supported. Settings validation rejects invalid
-combinations before startup.
+sessions. Device verification requires either the built-in or external OAuth2
+interaction mode. External interaction additionally requires the browser JSON
+transport while an interactive grant is enabled, plus absolute
+`ZA_UI__URLS__AUTHORIZATION_INTERACTION` and
+`ZA_UI__URLS__DEVICE_INTERACTION` values for the corresponding enabled grants.
+An inert external interaction selection does not constrain a non-interactive
+OAuth2 profile. Settings validation rejects invalid combinations before startup.
 
 The issuer must be an absolute HTTP(S) URL with a valid hostname and optional
 numeric port, without user information, a query string, or a fragment. In
@@ -218,20 +285,24 @@ OAuth2 protocol errors rather than framework `422` responses.
 There is no OAuth2 master switch. The OAuth2/OIDC surface is mounted whenever
 at least one grant or JWKS publication is enabled. Disable all grants, OIDC,
 and JWKS to remove the complete protocol surface. Application-owned OAuth2
-client, authorization, and token-session administration routes require at
+client and token-session administration routes require at
 least one enabled grant; JWKS publication alone does not mount them.
 
 A machine-to-machine deployment may disable browser sessions only after also
-disabling authorization code, device code, and OIDC. The canonical machine
-profile also disables Refresh Token because a new `client_credentials`-only
-installation has no grant that issues refresh tokens. Keep Refresh Token
-temporarily enabled only during a controlled transition that must continue to
-accept refresh-token families issued by an earlier interactive configuration.
-Revocation, introspection, OAuth2 metadata, JWKS, and client administration
-routes remain available. Those administration routes still require a
-user-backed operator; use the local
+disabling self-registration, authorization code, device code, and OIDC. Startup
+rejects `browser_session.enabled=false` together with `identity_workflow.registration_enabled=true`
+because that combination would let a person create an identity without leaving
+an authentication mechanism for that identity. The canonical machine profile
+also disables Refresh Token because a new `client_credentials`-only installation
+has no user grant that can originate a refresh-token family. Refresh Token is
+valid only when Authorization Code or Device Code is also enabled; it cannot be
+used as a standalone transition mode. Revocation, introspection, OAuth2
+metadata, JWKS, and client administration routes remain available. OAuth2
+client administration still requires a user-backed operator; use the local
 [machine-client provisioning command](../operations/oauth2-client-provisioning.md)
-when the deployment has no browser authentication.
+when the deployment has no browser authentication. The separate explicit-
+organization session-revocation route can be called by an authorized machine
+client as described in the [route reference](routes.md#server-control-plane-administration).
 
 The canonical server rejects a configuration that disables browser sessions
 without leaving an OAuth2 grant enabled. JWKS publication alone is not an
@@ -240,7 +311,7 @@ requires an HTTPS issuer.
 
 Signing and hashing secrets have development defaults for local readability.
 Replace them and follow [the signing-key guide](../operations/signing-keys.md) before
-exposing the server. Keep `ZA_OAUTH2__PRV_KEY_B64`, token hash secrets, and
+exposing the server. Keep `ZA_OAUTH2__SIGNING_PRIVATE_KEY_B64`, token hash secrets, and
 authorization-code hash secrets out of source control and logs. Public keys are
 not secret. `ZA_OAUTH2__PREVIOUS_PUBLIC_KEYS` retains verification-only material; never put
 an old private key in that collection.
@@ -249,50 +320,49 @@ an old private key in that collection.
 
 | Environment variable | Default | Purpose |
 | --- | --- | --- |
-| `ZA_AUTH__REGISTRATION_ENABLED` | `true` | Mount public signup and new email-verification requests. |
-| `ZA_AUTH__EMAIL__FRONTEND_BASE_URL` | local auth origin | Base URL hosting the verification, reset, and invitation pages. |
-| `ZA_AUTH__TOKENS__DERIVATION_KEY_ID` | `default` | Stable identifier persisted with tokens created by the active derivation key. |
-| `ZA_AUTH__TOKENS__DERIVATION_SECRET` | development value | HMAC secret used to reproduce the same workflow link on outbox retry. |
-| `ZA_AUTH__TOKENS__PREVIOUS_DERIVATION_SECRETS` | `[]` | JSON array of retained `{key_id, secret}` derivation-key entries. |
-| `ZA_AUTH__TOKENS__VERIFY_TOKEN_TTL_SECONDS` | `86400` | Email-verification and email-change token lifetime. |
-| `ZA_AUTH__TOKENS__INVITE_TOKEN_TTL_SECONDS` | `604800` | Invitation token lifetime. |
-| `ZA_AUTH__TOKENS__RESET_TOKEN_TTL_SECONDS` | `3600` | Password-reset token lifetime. |
+| `ZA_IDENTITY_WORKFLOW__REGISTRATION_ENABLED` | `true` | Mount public signup and new email-verification requests. |
+| `ZA_IDENTITY_WORKFLOW__WORKFLOW_TOKENS__DERIVATION_KEY_ID` | `default` | Stable identifier persisted with tokens created by the active derivation key. |
+| `ZA_IDENTITY_WORKFLOW__WORKFLOW_TOKENS__DERIVATION_SECRET` | development value | HMAC secret used to reproduce the same workflow link on outbox retry. |
+| `ZA_IDENTITY_WORKFLOW__WORKFLOW_TOKENS__PREVIOUS_DERIVATION_SECRETS` | `[]` | JSON array of retained `{key_id, secret}` derivation-key entries. |
+| `ZA_IDENTITY_WORKFLOW__WORKFLOW_TOKENS__VERIFY_TOKEN_TTL_SECONDS` | `86400` | Email-verification and email-change token lifetime. |
+| `ZA_IDENTITY_WORKFLOW__WORKFLOW_TOKENS__INVITE_TOKEN_TTL_SECONDS` | `604800` | Invitation token lifetime. |
+| `ZA_IDENTITY_WORKFLOW__WORKFLOW_TOKENS__RESET_TOKEN_TTL_SECONDS` | `3600` | Password-reset token lifetime. |
 | `ZA_BOOTSTRAP__OPERATOR_EMAIL` | unset | Email for the first operator on an empty database. |
 | `ZA_BOOTSTRAP__OPERATOR_PASSWORD` | unset | Initial operator password. |
 | `ZA_BOOTSTRAP__ORGANIZATION_NAME` | `Zero Auth Lite` | Organization name created for the first operator. |
 | `ZA_BOOTSTRAP__FIRST_NAME` | `Bootstrap` | First name assigned to the first operator. |
 | `ZA_BOOTSTRAP__LAST_NAME` | `Operator` | Last name assigned to the first operator. |
 
-`ZA_AUTH__EMAIL__FRONTEND_BASE_URL` must be an exact HTTP(S) origin: credentials, paths, query
-strings, and fragments are rejected. In `deployment` mode it must also use
-HTTPS so verification, password-reset, invitation, and email-change tokens are
-not placed in plaintext links.
+The exact verification, password-reset, and invitation destinations are configured
+under `ZA_UI__URLS__...`. In `deployment` mode reachable workflow URLs must use
+HTTPS so their single-use tokens are not placed in plaintext links. A strict
+Client Credentials machine profile may retain the unused local defaults.
 
 Verification, invitation, and reset lifetimes are configured under
-`ZA_AUTH__TOKENS__...`. These single-use artifacts are separate from
+`ZA_IDENTITY_WORKFLOW__WORKFLOW_TOKENS__...`. These single-use artifacts are separate from
 OAuth2 access and refresh tokens. Remove bootstrap credentials after the first
 operator has been created. Replace the derivation secret in production.
 
-The selected authentication transport remains part of the server surface,
-except for public registration. Set `ZA_AUTH__REGISTRATION_ENABLED=false` to remove
+The selected identity transport remains part of the server surface, except for
+public registration. Set `ZA_IDENTITY_WORKFLOW__REGISTRATION_ENABLED=false` to remove
 `POST /api/v1/auth/register` and `/api/v1/auth/email/verify/request` from
 runtime and OpenAPI. Confirmation stays mounted for already-issued tokens.
 This closes new self-registration without disabling invitations,
 administrative user creation, password recovery, or
-`/api/v1/auth/email/change/confirm`. `ZA_AUTH__EMAIL__FRONTEND_BASE_URL` selects
-the origin used in workflow email links. In `builtin` mode it identifies the
-Zero Auth Lite origin; in `external` mode it is required to identify the external
-consumer that submits tokens to the JSON confirmation endpoints.
+`/api/v1/auth/email/change/confirm`. The three workflow URLs select the exact
+consumer pages placed in notification links. Built-in mode validates their
+canonical Zero Auth Lite paths; external mode accepts application-owned paths
+that submit tokens to the confirmation endpoints.
 
-To rotate it safely, choose a new `ZA_AUTH__TOKENS__DERIVATION_KEY_ID`, set the new
-`ZA_AUTH__TOKENS__DERIVATION_SECRET`, and move the previous identifier and secret into
-`ZA_AUTH__TOKENS__PREVIOUS_DERIVATION_SECRETS`. For example, after replacing the original
+To rotate it safely, choose a new `ZA_IDENTITY_WORKFLOW__WORKFLOW_TOKENS__DERIVATION_KEY_ID`, set the new
+`ZA_IDENTITY_WORKFLOW__WORKFLOW_TOKENS__DERIVATION_SECRET`, and move the previous identifier and secret into
+`ZA_IDENTITY_WORKFLOW__WORKFLOW_TOKENS__PREVIOUS_DERIVATION_SECRETS`. For example, after replacing the original
 `default` key with `2026-09`:
 
 ```bash
-export ZA_AUTH__TOKENS__DERIVATION_KEY_ID=2026-09
-export ZA_AUTH__TOKENS__DERIVATION_SECRET="new-secret-at-least-32-characters"
-export ZA_AUTH__TOKENS__PREVIOUS_DERIVATION_SECRETS='[{"key_id":"default","secret":"old-secret-at-least-32-characters"}]'
+export ZA_IDENTITY_WORKFLOW__WORKFLOW_TOKENS__DERIVATION_KEY_ID=2026-09
+export ZA_IDENTITY_WORKFLOW__WORKFLOW_TOKENS__DERIVATION_SECRET="new-secret-at-least-32-characters"
+export ZA_IDENTITY_WORKFLOW__WORKFLOW_TOKENS__PREVIOUS_DERIVATION_SECRETS='[{"key_id":"default","secret":"old-secret-at-least-32-characters"}]'
 ```
 
 Retain an old key until no stored token references its identifier. A missing or
@@ -300,7 +370,11 @@ incorrect retained key makes the corresponding outbox delivery fail and retry;
 the dispatcher never sends a reconstructed link whose hash differs from the
 stored token.
 
-## Transactional Mail
+## Mail Delivery
+
+These settings configure rendering and SMTP delivery after an authentication
+notification has been committed to the outbox. The database transaction records
+the delivery intention; it never includes template rendering or SMTP network I/O.
 
 | Environment variable | Default | Purpose |
 | --- | --- | --- |
@@ -317,31 +391,41 @@ stored token.
 | `ZA_MAIL__SMTP_SSL` | `false` | Open an implicit TLS SMTP connection. |
 | `ZA_MAIL__SMTP_TIMEOUT_SECONDS` | `10` | Connection and SMTP operation timeout. |
 
-Choose the TLS mode expected by the SMTP server. With `ZA_MAIL__SMTP_SSL=true`, Zero Auth Lite
-uses implicit TLS and does not call STARTTLS; otherwise `ZA_MAIL__SMTP_STARTTLS=true`
-upgrades the plain connection. Keep SMTP credentials out of source control and
-logs. A custom `ZA_MAIL__TEMPLATE_DIR` replaces the packaged template root and must
+Choose the TLS mode expected by the SMTP server. With
+`ZA_MAIL__SMTP_SSL=true`, Zero Auth Lite uses implicit TLS and does not call
+STARTTLS; otherwise `ZA_MAIL__SMTP_STARTTLS=true` upgrades the plain connection.
+Both modes verify the SMTP server certificate and hostname against the operating
+system trust store. Do not enable SSL and STARTTLS together. SMTP authentication
+requires a nonempty username and password together; partial credentials are
+rejected at startup, as are credentials configured without either TLS mode.
+Deployment mode requires SSL or STARTTLS whenever mail delivery is enabled.
+It also rejects the packaged `zero-auth-lite@example.com` sender; configure an
+address on a domain authorized to send mail for the deployment. SMTP hostnames
+must not be blank. Keep SMTP credentials out of source control and logs. A custom
+`ZA_MAIL__TEMPLATE_DIR` replaces the packaged template root and must
 contain the same relative template paths used by authentication notifications.
 
 ## Notification Outbox
 
 | Environment variable | Default | Purpose |
 | --- | --- | --- |
-| `ZA_EVENTS__POLL_INTERVAL_SECONDS` | `1` | Delay between dispatcher polls. |
-| `ZA_EVENTS__BATCH_SIZE` | `20` | Maximum events claimed per poll. |
-| `ZA_EVENTS__LEASE_SECONDS` | `60` | Time before a crashed worker's claim is recoverable. |
-| `ZA_EVENTS__RETRY_MAX_SECONDS` | `300` | Maximum exponential retry delay. |
-| `ZA_EVENTS__RETENTION_SECONDS` | `604800` | Delivered-row retention before cleanup. |
-| `ZA_EVENTS__CLEANUP_INTERVAL_SECONDS` | `3600` | Periodic cleanup interval. |
-| `ZA_EVENTS__CLEANUP_BATCH_SIZE` | `100` | Maximum delivered events deleted per cleanup transaction. |
-| `ZA_EVENTS__SHUTDOWN_TIMEOUT_SECONDS` | `15` | Maximum graceful outbox-worker shutdown wait. |
+| `ZA_NOTIFICATION_OUTBOX__POLL_INTERVAL_SECONDS` | `1` | Delay between dispatcher polls. |
+| `ZA_NOTIFICATION_OUTBOX__BATCH_SIZE` | `20` | Maximum events claimed per poll. |
+| `ZA_NOTIFICATION_OUTBOX__LEASE_SECONDS` | `60` | Time before a crashed worker's claim is recoverable. |
+| `ZA_NOTIFICATION_OUTBOX__RETRY_MAX_SECONDS` | `300` | Maximum exponential retry delay. |
+| `ZA_NOTIFICATION_OUTBOX__RETENTION_SECONDS` | `604800` | Terminal outbox-row retention before cleanup. |
+| `ZA_NOTIFICATION_OUTBOX__CLEANUP_INTERVAL_SECONDS` | `3600` | Periodic cleanup interval. |
+| `ZA_NOTIFICATION_OUTBOX__CLEANUP_BATCH_SIZE` | `100` | Maximum terminal events deleted per cleanup transaction. |
+| `ZA_NOTIFICATION_OUTBOX__SHUTDOWN_TIMEOUT_SECONDS` | `15` | Maximum graceful outbox-worker shutdown wait. |
 
 The dedicated outbox worker runs the dispatcher. HTTP success means that a
 notification was transactionally scheduled; SMTP delivery may happen just
 after the response.
 Delivery is at least once, so mail consumers should tolerate duplicates.
 Retained rows expose a terminal processing result for delivered and deliberately
-discarded notifications.
+discarded notifications, as well as permanent payload, template, or handler
+failures. SMTP transport failures remain pending and use the configured retry
+backoff.
 
 `ZA_MAIL__ENABLED=false` disables external email delivery, not the
 outbox worker. Every currently supported outbox event is an email notification,
@@ -351,7 +435,18 @@ outbox event: session revocation remains part of the originating SQL
 transaction.
 Development mode permits this setting for focused tests and demonstrations,
 but affected users cannot receive or complete a newly requested workflow.
-Deployment mode therefore rejects disabled mail delivery at startup.
+Deployment mode permits disabled mail only when identity-workflow presentation
+and the interactive authentication API routes, browser sessions, and Refresh Token are all
+disabled. Otherwise startup rejects the configuration.
+
+Deployment validation follows the enabled capabilities. A Client
+Credentials-only server that disables browser sessions, Refresh Token, and both
+identity-workflow transports does not require a workflow-token derivation secret
+or email frontend URL. Authorization Code requires its hash secret; every
+token-issuing grant requires the token hash secret and private signing key.
+JWKS-only publication does not require grant hash secrets or a private signing
+key, but still requires non-development public verification material and a key
+identifier.
 
 ## Python API
 

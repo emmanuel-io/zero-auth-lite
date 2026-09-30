@@ -1,9 +1,8 @@
 """Tests for current-organization user API route handlers."""
 
 import pytest
-from app.api.dependencies.ids import format_user_id
 from app.api.v1.organization.users.router import (
-    add_user_to_organization,
+    create_organization_user,
     delete_user,
     get_user,
     list_users,
@@ -14,8 +13,8 @@ from app.api.v1.organization.users.schemas import (
     OrganizationUserCreateRequest,
     OrganizationUserPatchRequest,
     OrganizationUserReplaceRequest,
+    OrganizationUserSearchQuery,
 )
-from app.public_ids import PublicId
 from fastapi import status
 from pydantic import ValidationError
 
@@ -24,6 +23,9 @@ from tests.fixtures.api import (
     TEST_LIST_OFFSET,
     TEST_PASSWORD,
     TEST_USER_PUBLIC_ID,
+)
+from tests.identifiers import (
+    PublicId,
 )
 from tests.mocks.api import FakeOrganizationUsersService
 
@@ -139,18 +141,20 @@ async def test_user_collection_routes_call_service() -> None:
     """Assert user collection handlers return direct response models."""
     service = FakeOrganizationUsersService()
 
-    create_response = await add_user_to_organization(
-        _admin_ctx=None,  # type: ignore[arg-type]
+    create_response = await create_organization_user(
+        _admin_ctx=None,  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
         payload=OrganizationUserCreateRequest(
             email="new@example.com", password=TEST_PASSWORD
         ),
-        users_service=service,  # type: ignore[arg-type]
+        users_service=service,  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
     )
     list_response = await list_users(
-        users_service=service,  # type: ignore[arg-type]
-        _admin_ctx=None,  # type: ignore[arg-type]
-        offset=TEST_LIST_OFFSET,
-        limit=TEST_LIST_LIMIT,
+        users_service=service,  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+        _admin_ctx=None,  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+        query=OrganizationUserSearchQuery(
+            offset=TEST_LIST_OFFSET,
+            limit=TEST_LIST_LIMIT,
+        ),
     )
 
     assert str(create_response.email) == "new@example.com"
@@ -168,10 +172,9 @@ async def test_user_list_filters_by_active_and_verified() -> None:
     service = FakeOrganizationUsersService()
 
     await list_users(
-        users_service=service,  # type: ignore[arg-type]
-        _admin_ctx=None,  # type: ignore[arg-type]
-        active=True,
-        email_verified=False,
+        users_service=service,  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+        _admin_ctx=None,  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+        query=OrganizationUserSearchQuery(active=True, email_verified=False),
     )
 
     assert service.criteria is not None
@@ -191,9 +194,9 @@ async def test_user_list_sorts_by_active_and_verified() -> None:
         service = FakeOrganizationUsersService()
 
         await list_users(
-            users_service=service,  # type: ignore[arg-type]
-            _admin_ctx=None,  # type: ignore[arg-type]
-            sort=sort_key,
+            users_service=service,  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+            _admin_ctx=None,  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+            query=OrganizationUserSearchQuery(sort=sort_key),
         )
 
         assert service.criteria is not None
@@ -204,16 +207,16 @@ async def test_user_list_sorts_by_active_and_verified() -> None:
 async def test_user_item_routes_parse_public_ids() -> None:
     """Assert user item handlers parse user path IDs before service calls."""
     service = FakeOrganizationUsersService()
-    path_id = format_user_id(PublicId(TEST_USER_PUBLIC_ID))
+    path_id = PublicId(TEST_USER_PUBLIC_ID)
 
     get_response = await get_user(
-        users_service=service,  # type: ignore[arg-type]
+        users_service=service,  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
         user_id=path_id,
-        _admin_ctx=None,  # type: ignore[arg-type]
+        _admin_ctx=None,  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
     )
     replace_response = await replace_user(
         user_id=path_id,
-        _admin_ctx=None,  # type: ignore[arg-type]
+        _admin_ctx=None,  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
         payload=OrganizationUserReplaceRequest(
             email="updated@example.com",
             first_name="Updated",
@@ -221,18 +224,18 @@ async def test_user_item_routes_parse_public_ids() -> None:
             is_active=True,
             role="member",
         ),
-        users_service=service,  # type: ignore[arg-type]
+        users_service=service,  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
     )
     patch_response = await patch_user(
         user_id=path_id,
-        _admin_ctx=None,  # type: ignore[arg-type]
+        _admin_ctx=None,  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
         payload=OrganizationUserPatchRequest(email="patched@example.com"),
-        users_service=service,  # type: ignore[arg-type]
+        users_service=service,  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
     )
     delete_response = await delete_user(
         user_id=path_id,
-        _admin_ctx=None,  # type: ignore[arg-type]
-        users_service=service,  # type: ignore[arg-type]
+        _admin_ctx=None,  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+        users_service=service,  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
     )
 
     assert get_response.public_id == TEST_USER_PUBLIC_ID
