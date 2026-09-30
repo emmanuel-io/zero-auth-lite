@@ -7,6 +7,9 @@ repo_name = "emmanuel-io/zero-auth-lite"
 docs_dir = "docs"
 site_dir = "site"
 dev_addr = "127.0.0.1:8008"
+extra_css = [
+    "stylesheets/brand.css",
+]
 nav = [
     { "Home" = "index.md" },
     { "Getting started" = [
@@ -68,6 +71,7 @@ nav = [
 
 [project.theme]
 variant = "modern"
+font = false
 features = [
     "content.code.annotate",
     "content.code.copy",
@@ -84,12 +88,16 @@ features = [
 [[project.theme.palette]]
 media = "(prefers-color-scheme: light)"
 scheme = "default"
+primary = "custom"
+accent = "custom"
 toggle.icon = "lucide/sun"
 toggle.name = "Switch to dark mode"
 
 [[project.theme.palette]]
 media = "(prefers-color-scheme: dark)"
 scheme = "slate"
+primary = "custom"
+accent = "custom"
 toggle.icon = "lucide/moon"
 toggle.name = "Switch to light mode"
 
