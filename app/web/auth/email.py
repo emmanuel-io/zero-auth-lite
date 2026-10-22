@@ -21,7 +21,11 @@ from app.settings.ui import (
     BUILTIN_PASSWORD_RESET_PATH,
     BUILTIN_VERIFICATION_PATH,
 )
-from app.web.auth.inputs import PasswordForm, WorkflowTokenForm, WorkflowTokenQuery
+from app.web.auth.inputs import (
+    PasswordWorkflowForm,
+    WorkflowTokenForm,
+    WorkflowTokenQuery,
+)
 from app.web.redirects import workflow_completion_url
 from app.web.rendering import no_store_redirect, render_page
 from app.web.routes import BrowserPageRoute
@@ -121,17 +125,16 @@ async def submit_verification(  # noqa: PLR0913
     db_session: DbSessionDep,
     csrf_settings: CSRFSettingsDep,
     settings: SettingsDep,
-    token: WorkflowTokenForm,
-    csrf_token: Annotated[str | None, Form()] = None,
+    form: Annotated[WorkflowTokenForm, Form()],
 ) -> RedirectResponse:
     """Consume a verification token through the canonical service."""
     validate_pre_session_form_csrf(
         request=request,
-        csrf_token=csrf_token,
+        csrf_token=form.csrf_token,
         csrf_settings=csrf_settings,
     )
     try:
-        await service.confirm_verification(token)
+        await service.confirm_verification(form.token)
     except AppError:
         await db_session.rollback()
         return no_store_redirect(
@@ -170,26 +173,24 @@ async def submit_password_reset(  # noqa: PLR0913
     db_session: DbSessionDep,
     csrf_settings: CSRFSettingsDep,
     settings: SettingsDep,
-    token: WorkflowTokenForm,
-    password: PasswordForm,
-    csrf_token: Annotated[str | None, Form()] = None,
+    form: Annotated[PasswordWorkflowForm, Form()],
 ) -> RedirectResponse:
     """Validate and apply a password reset through the canonical service."""
     validate_pre_session_form_csrf(
         request=request,
-        csrf_token=csrf_token,
+        csrf_token=form.csrf_token,
         csrf_settings=csrf_settings,
     )
     try:
-        validated_password = validate_password_value(password)
+        validated_password = validate_password_value(form.password)
     except ValueError:
-        query = urlencode({"token": token, "error": "invalid"})
+        query = urlencode({"token": form.token, "error": "invalid"})
         return no_store_redirect(
             f"{BUILTIN_PASSWORD_RESET_PATH}?{query}",
             status_code=status.HTTP_303_SEE_OTHER,
         )
     try:
-        await service.reset_password(token=token, password=validated_password)
+        await service.reset_password(token=form.token, password=validated_password)
     except AppError:
         await db_session.rollback()
         return no_store_redirect(
@@ -228,26 +229,24 @@ async def submit_invite_acceptance(  # noqa: PLR0913
     db_session: DbSessionDep,
     csrf_settings: CSRFSettingsDep,
     settings: SettingsDep,
-    token: WorkflowTokenForm,
-    password: PasswordForm,
-    csrf_token: Annotated[str | None, Form()] = None,
+    form: Annotated[PasswordWorkflowForm, Form()],
 ) -> RedirectResponse:
     """Validate and accept an invitation through the canonical service."""
     validate_pre_session_form_csrf(
         request=request,
-        csrf_token=csrf_token,
+        csrf_token=form.csrf_token,
         csrf_settings=csrf_settings,
     )
     try:
-        validated_password = validate_password_value(password)
+        validated_password = validate_password_value(form.password)
     except ValueError:
-        query = urlencode({"token": token, "error": "invalid"})
+        query = urlencode({"token": form.token, "error": "invalid"})
         return no_store_redirect(
             f"{BUILTIN_INVITATION_PATH}?{query}",
             status_code=status.HTTP_303_SEE_OTHER,
         )
     try:
-        await service.accept_invite(token=token, password=validated_password)
+        await service.accept_invite(token=form.token, password=validated_password)
     except AppError:
         await db_session.rollback()
         return no_store_redirect(

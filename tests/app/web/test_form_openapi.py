@@ -9,6 +9,8 @@ from fastapi import FastAPI
 
 
 pytestmark = pytest.mark.unit
+DEFAULT_PAGE_LIMIT = 20
+MAX_PAGE_LIMIT = 100
 
 
 @pytest.fixture(scope="module")
@@ -120,3 +122,77 @@ def test_authenticated_browser_forms_document_optional_csrf(
 
     assert "csrf_token" in schema["properties"]
     assert set(schema.get("required", [])) == required_fields
+
+
+@pytest.mark.parametrize(
+    ("path", "required_fields", "optional_fields"),
+    [
+        (
+            "/login",
+            {"email", "password"},
+            {"csrf_token", "transaction_id", "user_code", "return_url"},
+        ),
+        (
+            "/register",
+            {"email", "password", "organization_name"},
+            {"csrf_token", "first_name", "last_name"},
+        ),
+        ("/forgot-password", {"email"}, {"csrf_token"}),
+        ("/resend-verification", {"email"}, {"csrf_token"}),
+        ("/verify-email", {"token"}, {"csrf_token"}),
+        ("/reset-password", {"token", "password"}, {"csrf_token"}),
+        ("/accept-invite", {"token", "password"}, {"csrf_token"}),
+    ],
+)
+def test_authentication_forms_preserve_flat_fields(
+    app: FastAPI,
+    path: str,
+    required_fields: set[str],
+    optional_fields: set[str],
+) -> None:
+    """Keep browser form names and requiredness through model composition."""
+    schema = _form_schema(app, path)
+    parts = [schema]
+    parts.extend(
+        app.openapi()["components"]["schemas"][part["$ref"].rsplit("/", 1)[1]]
+        for part in schema.get("allOf", [])
+    )
+    properties = {key for part in parts for key in part.get("properties", {})}
+    required = {key for part in parts for key in part.get("required", [])}
+
+    assert properties == required_fields | optional_fields
+    assert required == required_fields
+
+
+@pytest.mark.parametrize(
+    ("path", "filter_names"),
+    [
+        (
+            "/management/operator/users",
+            {"q", "organization_id", "role", "operator", "active", "email_verified"},
+        ),
+        (
+            "/management/organization/users",
+            {"q", "role", "active", "email_verified", "created_from", "created_to"},
+        ),
+        (
+            "/management/organization/oauth2/sessions",
+            {"client_id", "grant_type", "user_id", "active_only"},
+        ),
+        ("/management/operator/organizations", set()),
+        ("/management/operator/oauth2/clients", set()),
+    ],
+)
+def test_management_list_queries_preserve_flat_parameters(
+    app: FastAPI, path: str, filter_names: set[str]
+) -> None:
+    """Expose filters, pagination, and notices as ordinary query parameters."""
+    parameters = app.openapi()["paths"][path]["get"]["parameters"]
+    query_parameters = {p["name"]: p for p in parameters if p["in"] == "query"}
+
+    assert set(query_parameters) == filter_names | {"offset", "limit", "notice"}
+    assert all(not p["required"] for p in query_parameters.values())
+    assert query_parameters["offset"]["schema"]["minimum"] == 0
+    assert query_parameters["limit"]["schema"]["minimum"] == 1
+    assert query_parameters["limit"]["schema"]["maximum"] == MAX_PAGE_LIMIT
+    assert query_parameters["limit"]["schema"]["default"] == DEFAULT_PAGE_LIMIT

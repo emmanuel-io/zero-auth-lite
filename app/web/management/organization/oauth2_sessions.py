@@ -3,10 +3,8 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Query, Request, Response
-from pydantic import UUID4
 
 from app.browser_sessions.service_dependencies import BrowserSessionLifecycleServiceDep
-from app.oauth2.grants.types import OAuth2SessionGrantType
 from app.oauth2.organization_oauth2_sessions.dependencies import (
     OrganizationOAuth2SessionServiceDep,
 )
@@ -20,8 +18,10 @@ from app.web.management.ids import (
     OAuth2SessionIdPath,
 )
 from app.web.management.notices import ManagementNotice
+from app.web.management.organization.queries import OrganizationOAuth2SessionFilters
 from app.web.management.organization.views import OrganizationOAuth2SessionView
 from app.web.management.pagination import page_url
+from app.web.management.queries import ManagementPagination
 from app.web.management.responses import mutation_success, render_management_page
 from app.web.routes import ManagementPageRoute
 
@@ -35,29 +35,25 @@ async def oauth2_sessions(  # noqa: PLR0913, PLR0917
     service: OrganizationOAuth2SessionServiceDep,
     lifecycle_service: BrowserSessionLifecycleServiceDep,
     user_ctx: OrganizationAdminUIDep,
-    client_id: Annotated[UUID4 | None, Query()] = None,
-    grant_type: Annotated[OAuth2SessionGrantType | None, Query()] = None,
-    user_id: Annotated[UUID4 | None, Query()] = None,
-    active_only: Annotated[bool, Query()] = True,  # noqa: FBT002
-    offset: Annotated[int, Query(ge=0)] = 0,
-    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    query: Annotated[OrganizationOAuth2SessionFilters, Query()],
+    pagination: Annotated[ManagementPagination, Query()],
     notice: Annotated[str | None, Query()] = None,
 ) -> Response:
     """Render the current organization OAuth2 session list."""
     page = await service.list_sessions(
         actor_ctx=user_ctx,
-        client_id=client_id,
-        grant_type=grant_type,
-        user_public_id=user_id,
-        active_only=active_only,
-        offset=offset,
-        limit=limit,
+        client_id=query.client_id,
+        grant_type=query.grant_type,
+        user_public_id=query.user_id,
+        active_only=query.active_only,
+        offset=pagination.offset,
+        limit=pagination.limit,
     )
     filters = {
-        "client_id": client_id,
-        "grant_type": grant_type,
-        "user_id": user_id,
-        "active_only": active_only,
+        "client_id": query.client_id,
+        "grant_type": query.grant_type,
+        "user_id": query.user_id,
+        "active_only": query.active_only,
     }
     return await render_management_page(
         request,
@@ -70,21 +66,21 @@ async def oauth2_sessions(  # noqa: PLR0913, PLR0917
         previous_url=(
             page_url(
                 "/management/organization/oauth2/sessions",
-                offset=offset - limit,
-                limit=limit,
+                offset=pagination.offset - pagination.limit,
+                limit=pagination.limit,
                 **filters,
             )
-            if offset > 0
+            if pagination.offset > 0
             else None
         ),
         next_url=(
             page_url(
                 "/management/organization/oauth2/sessions",
-                offset=offset + limit,
-                limit=limit,
+                offset=pagination.offset + pagination.limit,
+                limit=pagination.limit,
                 **filters,
             )
-            if offset + limit < page.total
+            if pagination.offset + pagination.limit < page.total
             else None
         ),
         notice=notice,

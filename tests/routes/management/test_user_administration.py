@@ -304,3 +304,48 @@ async def test_user_deletion_confirmation_and_navigation(
     destination_header = "HX-Redirect" if transport == "htmx" else "location"
     assert deleted.status_code == expected_status
     assert deleted.headers[destination_header] == f"{users_url}?notice=user-deleted"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", ["operator", "organization"])
+async def test_user_filters_compose_with_pagination_and_notices(
+    client: httpx.AsyncClient,
+    verified_user_credentials: UserCredentials,
+    surface: str,
+) -> None:
+    """Apply filters while accepting sibling pagination and notice fields."""
+    await login_browser(client, verified_user_credentials)
+
+    response = await client.get(
+        f"/management/{surface}/users",
+        params={
+            "q": "no-matching-user@example.com",
+            "active": "false",
+            "offset": "0",
+            "limit": "1",
+            "notice": "user-updated",
+            "unknown": "ignored",
+        },
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert "User updated." in response.text
+    assert "No users match these filters." in response.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.negative
+async def test_organization_user_filters_preserve_reversed_date_error(
+    client: httpx.AsyncClient,
+    verified_user_credentials: UserCredentials,
+) -> None:
+    """Keep the existing HTML domain error for an inverted date range."""
+    await login_browser(client, verified_user_credentials)
+
+    response = await client.get(
+        "/management/organization/users",
+        params={"created_from": "2026-02-02", "created_to": "2026-02-01"},
+    )
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "Start date is after end date." in response.text

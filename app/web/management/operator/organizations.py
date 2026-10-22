@@ -20,6 +20,7 @@ from app.web.management.operator.forms import (
 )
 from app.web.management.operator.views import OrganizationView
 from app.web.management.pagination import page_url
+from app.web.management.queries import ManagementPagination
 from app.web.management.responses import mutation_success, render_management_page
 from app.web.routes import ManagementPageRoute
 
@@ -33,12 +34,11 @@ async def organizations(  # noqa: PLR0913, PLR0917
     service: OperatorUIOrganizationsServiceDep,
     lifecycle_service: BrowserSessionLifecycleServiceDep,
     user_ctx: OperatorUIDep,
-    offset: Annotated[int, Query(ge=0)] = 0,
-    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    pagination: Annotated[ManagementPagination, Query()],
     notice: Annotated[str | None, Query()] = None,
 ) -> Response:
     """Render the organization list."""
-    items = await service.list(offset=offset, limit=limit)
+    items = await service.list(offset=pagination.offset, limit=pagination.limit)
     total = await service.count()
     return await render_management_page(
         request,
@@ -47,24 +47,24 @@ async def organizations(  # noqa: PLR0913, PLR0917
         "management/operator/organizations.html",
         organizations=[OrganizationView.from_dto(item) for item in items],
         total=total,
-        offset=offset,
-        limit=limit,
+        offset=pagination.offset,
+        limit=pagination.limit,
         previous_url=(
             page_url(
                 "/management/operator/organizations",
-                offset=offset - limit,
-                limit=limit,
+                offset=pagination.offset - pagination.limit,
+                limit=pagination.limit,
             )
-            if offset > 0
+            if pagination.offset > 0
             else None
         ),
         next_url=(
             page_url(
                 "/management/operator/organizations",
-                offset=offset + limit,
-                limit=limit,
+                offset=pagination.offset + pagination.limit,
+                limit=pagination.limit,
             )
-            if offset + limit < total
+            if pagination.offset + pagination.limit < total
             else None
         ),
         notice=notice,

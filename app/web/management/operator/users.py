@@ -8,8 +8,6 @@ from pydantic import UUID4
 from app.browser_sessions.service_dependencies import BrowserSessionLifecycleServiceDep
 from app.identity.users.criteria import ServerUserSearchCriteriaDTO
 from app.identity.users.dtos import ServerUserCreateDTO, ServerUserReplaceDTO
-from app.identity.users.enums import OrganizationMembershipRole
-from app.identity.users.specs import UserSpecs
 from app.web.management.dependencies import (
     OperatorFormDep,
     OperatorFormUsersServiceDep,
@@ -23,8 +21,10 @@ from app.web.management.operator.forms import (
     ServerUserCreateForm,
     ServerUserReplaceForm,
 )
+from app.web.management.operator.queries import ServerUserFilters
 from app.web.management.operator.views import ServerUserView
 from app.web.management.pagination import pagination_links
+from app.web.management.queries import ManagementPagination
 from app.web.management.responses import (
     mutation_success,
     render_management_page,
@@ -43,44 +43,36 @@ async def users(  # noqa: PLR0913, PLR0917
     service: OperatorUIUsersServiceDep,
     lifecycle_service: BrowserSessionLifecycleServiceDep,
     user_ctx: OperatorUIDep,
-    q: Annotated[
-        str | None, Query(max_length=UserSpecs.SEARCH_QUERY_LENGTH_MAX)
-    ] = None,
-    organization_id: Annotated[UUID4 | None, Query()] = None,
-    role: Annotated[OrganizationMembershipRole | None, Query()] = None,
-    operator: Annotated[bool | None, Query()] = None,
-    active: Annotated[bool | None, Query()] = None,
-    email_verified: Annotated[bool | None, Query()] = None,
-    offset: Annotated[int, Query(ge=0)] = 0,
-    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    query: Annotated[ServerUserFilters, Query()],
+    pagination: Annotated[ManagementPagination, Query()],
     notice: Annotated[str | None, Query()] = None,
 ) -> Response:
     """Render the user list."""
     page = await service.search(
         criteria=ServerUserSearchCriteriaDTO(
-            q=q,
-            organization_id=organization_id,
-            role=role.value if role is not None else None,
-            operator=operator,
-            active=active,
-            email_verified=email_verified,
-            offset=offset,
-            limit=limit,
+            q=query.q,
+            organization_id=query.organization_id,
+            role=query.role.value if query.role is not None else None,
+            operator=query.operator,
+            active=query.active,
+            email_verified=query.email_verified,
+            offset=pagination.offset,
+            limit=pagination.limit,
         )
     )
     filters = {
-        "q": q,
-        "organization_id": organization_id,
-        "role": role,
-        "operator": operator,
-        "active": active,
-        "email_verified": email_verified,
+        "q": query.q,
+        "organization_id": query.organization_id,
+        "role": query.role,
+        "operator": query.operator,
+        "active": query.active,
+        "email_verified": query.email_verified,
     }
     links = pagination_links(
         "/management/operator/users",
         filters=filters,
-        offset=offset,
-        limit=limit,
+        offset=pagination.offset,
+        limit=pagination.limit,
         total=page.total,
     )
     return await render_management_page(

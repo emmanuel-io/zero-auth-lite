@@ -27,6 +27,7 @@ from app.web.management.operator.forms import (
 )
 from app.web.management.operator.views import OAuth2ClientView
 from app.web.management.pagination import page_url
+from app.web.management.queries import ManagementPagination
 from app.web.management.responses import mutation_success, render_management_page
 from app.web.routes import ManagementPageRoute
 from app.web.validation import validated_model
@@ -41,14 +42,13 @@ async def clients(  # noqa: PLR0913, PLR0917
     service: OAuth2ClientRegistryServiceDep,
     lifecycle_service: BrowserSessionLifecycleServiceDep,
     user_ctx: OperatorUIDep,
-    offset: Annotated[int, Query(ge=0)] = 0,
-    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    pagination: Annotated[ManagementPagination, Query()],
     notice: Annotated[str | None, Query()] = None,
 ) -> Response:
     """Render the OAuth2 client list."""
     try:
         items = await service.list_clients(
-            operator_ctx=user_ctx, offset=offset, limit=limit
+            operator_ctx=user_ctx, offset=pagination.offset, limit=pagination.limit
         )
         total = await service.count_clients(operator_ctx=user_ctx)
     except OAuth2ClientServiceError as exc:
@@ -63,19 +63,19 @@ async def clients(  # noqa: PLR0913, PLR0917
         previous_url=(
             page_url(
                 "/management/operator/oauth2/clients",
-                offset=offset - limit,
-                limit=limit,
+                offset=pagination.offset - pagination.limit,
+                limit=pagination.limit,
             )
-            if offset > 0
+            if pagination.offset > 0
             else None
         ),
         next_url=(
             page_url(
                 "/management/operator/oauth2/clients",
-                offset=offset + limit,
-                limit=limit,
+                offset=pagination.offset + pagination.limit,
+                limit=pagination.limit,
             )
-            if offset + limit < total
+            if pagination.offset + pagination.limit < total
             else None
         ),
         notice=notice,

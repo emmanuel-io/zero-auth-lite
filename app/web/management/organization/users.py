@@ -1,6 +1,5 @@
 """Current-organization user browser routes."""
 
-from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, Form, Query, Request, Response
@@ -11,15 +10,12 @@ from app.identity.users.dtos import (
     OrganizationUserCreateDTO,
     OrganizationUserReplaceDTO,
 )
-from app.identity.users.enums import OrganizationMembershipRole
-from app.identity.users.specs import UserSpecs
 from app.web.management.dependencies import (
     OrganizationAdminFormDep,
     OrganizationAdminUIDep,
     OrganizationFormUsersServiceDep,
     OrganizationUIUsersServiceDep,
 )
-from app.web.management.errors import ManagementStartDateAfterEndDateError
 from app.web.management.forms import ConfirmedFormDep
 from app.web.management.ids import UserIdPath
 from app.web.management.notices import ManagementNotice
@@ -27,8 +23,10 @@ from app.web.management.organization.forms import (
     OrganizationUserCreateForm,
     OrganizationUserReplaceForm,
 )
+from app.web.management.organization.queries import OrganizationUserFilters
 from app.web.management.organization.views import OrganizationUserView
 from app.web.management.pagination import pagination_links
+from app.web.management.queries import ManagementPagination
 from app.web.management.responses import (
     mutation_success,
     render_management_page,
@@ -48,50 +46,36 @@ async def users(  # noqa: PLR0913, PLR0917
     users_service: OrganizationUIUsersServiceDep,
     lifecycle_service: BrowserSessionLifecycleServiceDep,
     user_ctx: OrganizationAdminUIDep,
-    q: Annotated[
-        str | None, Query(max_length=UserSpecs.SEARCH_QUERY_LENGTH_MAX)
-    ] = None,
-    role: Annotated[OrganizationMembershipRole | None, Query()] = None,
-    active: Annotated[bool | None, Query()] = None,
-    email_verified: Annotated[bool | None, Query()] = None,
-    created_from: Annotated[date | None, Query()] = None,
-    created_to: Annotated[date | None, Query()] = None,
-    offset: Annotated[int, Query(ge=0)] = 0,
-    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    query: Annotated[OrganizationUserFilters, Query()],
+    pagination: Annotated[ManagementPagination, Query()],
     notice: Annotated[str | None, Query()] = None,
 ) -> Response:
     """Render the user list."""
-    if (
-        created_from is not None
-        and created_to is not None
-        and created_from > created_to
-    ):
-        raise ManagementStartDateAfterEndDateError
     page = await users_service.search(
         criteria=OrganizationUserSearchCriteriaDTO(
-            q=q,
-            role=role.value if role is not None else None,
-            active=active,
-            email_verified=email_verified,
-            created_from=created_from,
-            created_to=created_to,
-            offset=offset,
-            limit=limit,
+            q=query.q,
+            role=query.role.value if query.role is not None else None,
+            active=query.active,
+            email_verified=query.email_verified,
+            created_from=query.created_from,
+            created_to=query.created_to,
+            offset=pagination.offset,
+            limit=pagination.limit,
         )
     )
     filters = {
-        "q": q,
-        "role": role,
-        "active": active,
-        "email_verified": email_verified,
-        "created_from": created_from,
-        "created_to": created_to,
+        "q": query.q,
+        "role": query.role,
+        "active": query.active,
+        "email_verified": query.email_verified,
+        "created_from": query.created_from,
+        "created_to": query.created_to,
     }
     links = pagination_links(
         "/management/organization/users",
         filters=filters,
-        offset=offset,
-        limit=limit,
+        offset=pagination.offset,
+        limit=pagination.limit,
         total=page.total,
     )
     return await render_management_page(
@@ -101,8 +85,8 @@ async def users(  # noqa: PLR0913, PLR0917
         "management/organization/users.html",
         users=[OrganizationUserView.from_dto(item) for item in page.items],
         total=page.total,
-        offset=offset,
-        limit=limit,
+        offset=pagination.offset,
+        limit=pagination.limit,
         filters=filters,
         previous_url=links.previous_url,
         next_url=links.next_url,

@@ -34,13 +34,7 @@ from app.settings.dependencies import (
 )
 from app.settings.root import Settings
 from app.settings.ui import BUILTIN_LOGOUT_PATH
-from app.web.auth.inputs import (
-    EmailForm,
-    FirstNameForm,
-    LastNameForm,
-    OrganizationNameForm,
-    PasswordForm,
-)
+from app.web.auth.inputs import EmailRequestForm, RegistrationForm
 from app.web.redirects import (
     management_authentication_entry_url,
     workflow_completion_url,
@@ -122,24 +116,19 @@ async def submit_registration(  # noqa: PLR0913
     registration_service: RegistrationServiceDep,
     csrf_settings: CSRFSettingsDep,
     settings: SettingsDep,
-    email: EmailForm,
-    password: PasswordForm,
-    organization_name: OrganizationNameForm,
-    first_name: FirstNameForm = "",
-    last_name: LastNameForm = "",
-    csrf_token: Annotated[str | None, Form()] = None,
+    form: Annotated[RegistrationForm, Form()],
 ) -> RedirectResponse:
     """Validate a form and call the canonical registration service."""
     validate_pre_session_form_csrf(
-        request=request, csrf_token=csrf_token, csrf_settings=csrf_settings
+        request=request, csrf_token=form.csrf_token, csrf_settings=csrf_settings
     )
     try:
         registration = RegistrationCreateDTO(
-            email=email,
-            password=password,
-            organization_name=organization_name,
-            first_name=first_name,
-            last_name=last_name,
+            email=form.email,
+            password=form.password,
+            organization_name=form.organization_name,
+            first_name=form.first_name,
+            last_name=form.last_name,
         )
         await registration_service.register(
             registration=registration,
@@ -166,21 +155,20 @@ async def resend_verification_page(
 
 
 @registration_router.post("/resend-verification")
-async def submit_resend_verification(  # noqa: PLR0913
+async def submit_resend_verification(
     *,
     request: Request,
     notification_requests: AuthNotificationRequestServiceDep,
     csrf_settings: CSRFSettingsDep,
     settings: SettingsDep,
-    email: EmailForm,
-    csrf_token: Annotated[str | None, Form()] = None,
+    form: Annotated[EmailRequestForm, Form()],
 ) -> RedirectResponse:
     """Publish the same opaque verification request used by the JSON adapter."""
     validate_pre_session_form_csrf(
-        request=request, csrf_token=csrf_token, csrf_settings=csrf_settings
+        request=request, csrf_token=form.csrf_token, csrf_settings=csrf_settings
     )
     try:
-        validated_email = validate_user_email(email)
+        validated_email = validate_user_email(form.email)
     except ValidationError:
         return _redirect("/resend-verification")
     await notification_requests.request_account_verification(validated_email)
@@ -203,21 +191,20 @@ async def forgot_password_page(
 
 
 @router.post("/forgot-password")
-async def submit_forgot_password(  # noqa: PLR0913
+async def submit_forgot_password(
     *,
     request: Request,
     notification_requests: AuthNotificationRequestServiceDep,
     csrf_settings: CSRFSettingsDep,
     settings: SettingsDep,
-    email: EmailForm,
-    csrf_token: Annotated[str | None, Form()] = None,
+    form: Annotated[EmailRequestForm, Form()],
 ) -> RedirectResponse:
     """Publish the same opaque reset request used by the JSON adapter."""
     validate_pre_session_form_csrf(
-        request=request, csrf_token=csrf_token, csrf_settings=csrf_settings
+        request=request, csrf_token=form.csrf_token, csrf_settings=csrf_settings
     )
     try:
-        validated_email = validate_user_email(email)
+        validated_email = validate_user_email(form.email)
     except ValidationError:
         return _redirect("/forgot-password")
     await notification_requests.request_password_reset(validated_email)
