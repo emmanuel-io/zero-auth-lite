@@ -4,7 +4,7 @@ from datetime import datetime, UTC
 from typing import Annotated
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, Response, Security, status
+from fastapi import APIRouter, Depends, Form, Query, Response, Security, status
 
 from app.browser_sessions.dependencies import (
     CurrentBrowserFormUserContextDep,
@@ -18,8 +18,7 @@ from app.oauth2.authorization.dtos import (
 )
 from app.oauth2.authorization.forms import (
     AuthorizationDecisionForm,
-    AuthorizationRequestForm,
-    AuthorizationRequestParams,
+    AuthorizationRequestFields,
 )
 from app.oauth2.authorization.http import (
     authorization_interaction_entry_url,
@@ -54,7 +53,7 @@ router = APIRouter(
 
 
 def _authorization_request_input(
-    params: AuthorizationRequestParams | AuthorizationRequestForm,
+    params: AuthorizationRequestFields,
 ) -> AuthorizationRequestInput:
     """Build client-controlled input from typed query or form parameters."""
     return AuthorizationRequestInput(
@@ -86,7 +85,7 @@ def _authorization_request_input(
     },
 )
 async def authorize(
-    params: Annotated[AuthorizationRequestParams, Depends()],
+    params: Annotated[AuthorizationRequestFields, Query()],
     authorization_service: AuthorizationRequestServiceDep,
     transaction_service: AuthorizationTransactionServiceDep,
     user_ctx: PublicOptionalBrowserUserContextDep,
@@ -122,7 +121,7 @@ async def authorize(
     },
 )
 async def authorize_form_post(
-    params: Annotated[AuthorizationRequestForm, Depends()],
+    params: Annotated[AuthorizationRequestFields, Form()],
     authorization_service: AuthorizationRequestServiceDep,
     transaction_service: AuthorizationTransactionServiceDep,
     user_ctx: PublicOptionalBrowserUserContextDep,

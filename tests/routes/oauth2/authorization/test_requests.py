@@ -33,21 +33,26 @@ pytestmark = pytest.mark.api
 
 @pytest.mark.asyncio
 @pytest.mark.negative
+@pytest.mark.parametrize("method", ["GET", "POST"])
 async def test_authorize_rejects_oversized_protocol_state(
     client: httpx.AsyncClient,
+    method: str,
 ) -> None:
     """Reject oversized state through the OAuth2 error boundary, not as 422."""
 
-    response = await client.get(
+    fields = {
+        "response_type": "code",
+        "client_id": str(deterministic_uuid("public-client")),
+        "redirect_uri": "https://client.example/callback",
+        "state": "x" * (OAuth2Specs.STATE_LENGTH_MAX + 1),
+        "code_challenge": create_s256_code_challenge(code_verifier=CODE_VERIFIER),
+        "code_challenge_method": "S256",
+    }
+    response = await client.request(
+        method,
         "/oauth2/authorize",
-        params={
-            "response_type": "code",
-            "client_id": str(deterministic_uuid("public-client")),
-            "redirect_uri": "https://client.example/callback",
-            "state": "x" * (OAuth2Specs.STATE_LENGTH_MAX + 1),
-            "code_challenge": create_s256_code_challenge(code_verifier=CODE_VERIFIER),
-            "code_challenge_method": "S256",
-        },
+        params=fields if method == "GET" else None,
+        data=fields if method == "POST" else None,
     )
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST

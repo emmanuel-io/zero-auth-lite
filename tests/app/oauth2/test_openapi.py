@@ -171,6 +171,21 @@ def test_authorization_openapi_separates_requests_and_decisions(
         "code_challenge_method",
         "nonce",
     }
+    required_fields = {
+        "response_type",
+        "client_id",
+        "redirect_uri",
+        "code_challenge",
+        "code_challenge_method",
+    }
+    assert set(request_form["required"]) == required_fields
+    assert {
+        name for name, item in parameters.items() if item["required"]
+    } == required_fields
+    assert (
+        request_form["properties"]["state"]["anyOf"][0]["maxLength"]
+        == OAuth2Specs.STATE_LENGTH_MAX
+    )
     decision_form = _form_schema(app, "/oauth2/authorize/decision")
     assert set(decision_form["properties"]) == {
         "transaction_id",

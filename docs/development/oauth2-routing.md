@@ -35,26 +35,21 @@ errors back to a client.
 
 ### Authorization Request
 
-Authorization request parameters belong in `Query` fields or a typed query
-dependency:
+GET and form POST authorization requests share `AuthorizationRequestFields` in
+`app/oauth2/authorization/forms.py`. The Pydantic model declares the transport
+constraints once; each route selects its input location:
 
 ```python
-class AuthorizationRequestParams:
-    def __init__(
-        self,
-        response_type: Annotated[Literal["code"], Query()],
-        client_id: Annotated[str, Query(min_length=1)],
-        redirect_uri: Annotated[AnyUrl, Query()],
-        code_challenge: Annotated[str, Query(pattern=r"^[A-Za-z0-9_-]{43,128}$")],
-        code_challenge_method: Annotated[Literal["S256"], Query()],
-        scope: Annotated[str | None, Query()] = None,
-        state: Annotated[str | None, Query()] = None,
-        nonce: Annotated[str | None, Query()] = None,
-    ) -> None: ...
+# GET /oauth2/authorize
+params: Annotated[AuthorizationRequestFields, Query()]
+
+# POST /oauth2/authorize
+params: Annotated[AuthorizationRequestFields, Form()]
 ```
 
-Adapt exact PKCE constraints to the current policy, but keep them typed and
-visible in the route contract.
+Fields remain flat query parameters or form fields. The model ignores unknown
+fields. Client and redirect-URI trust, response-type policy, and PKCE policy
+remain explicit service decisions so errors redirect only to a trusted client.
 
 ### Token Form
 
