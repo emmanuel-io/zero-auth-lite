@@ -17,6 +17,7 @@ from app.db.models.oauth2_device_authorization import (
 )
 from app.db.models.user import UserDB, UserEmailDB
 from app.identity.users.enums import UserEmailStatus
+from app.oauth2.specs import OAuth2Specs
 from app.oauth2.tokens.hash import hash_oauth2_token
 from app.password.pwdlib_hasher import PwdlibPasswordHasher
 from fastapi import FastAPI, status
@@ -908,3 +909,17 @@ async def test_device_verify_rejects_invalid_user_code(
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
     assert "Invalid or expired code" in response.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.negative
+async def test_device_authorization_rejects_oversized_scope(
+    client: httpx.AsyncClient,
+) -> None:
+    """Translate form-model validation into the OAuth2 error contract."""
+    response = await request_device_authorization(
+        client, scope="x" * (OAuth2Specs.SCOPE_LIST_LENGTH_MAX + 1)
+    )
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.json() == {"error": "invalid_request"}

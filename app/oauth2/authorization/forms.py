@@ -2,14 +2,13 @@
 
 from typing import Annotated, Literal
 
-from fastapi import Form
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.oauth2.specs import OAuth2Specs
 
 
 class AuthorizationRequestFields(BaseModel):
-    """Typed query parameters for an authorization-code request."""
+    """Transport fields shared by authorization query and form requests."""
 
     model_config = ConfigDict(extra="ignore")
 
@@ -40,18 +39,13 @@ class AuthorizationRequestFields(BaseModel):
     nonce: Annotated[str | None, Field(max_length=OAuth2Specs.NONCE_LENGTH_MAX)] = None
 
 
-class AuthorizationDecisionForm:
+class AuthorizationDecisionForm(BaseModel):
     """Typed consent submission for a validated authorization request."""
 
-    def __init__(
-        self,
-        transaction_id: Annotated[
-            str, Form(min_length=1, max_length=OAuth2Specs.PROTOCOL_VALUE_LENGTH_MAX)
-        ],
-        decision: Annotated[Literal["approve", "deny"], Form()],
-        csrf_token: Annotated[str | None, Form()] = None,
-    ) -> None:
-        """Store validated authorization decision fields."""
-        self.transaction_id = transaction_id
-        self.decision = decision
-        self.csrf_token = csrf_token
+    model_config = ConfigDict(extra="ignore")
+
+    transaction_id: Annotated[
+        str, Field(min_length=1, max_length=OAuth2Specs.PROTOCOL_VALUE_LENGTH_MAX)
+    ]
+    decision: Literal["approve", "deny"]
+    csrf_token: str | None = None

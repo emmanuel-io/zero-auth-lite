@@ -253,7 +253,7 @@ async def _create_authorization_transaction(
     },
 )
 async def authorize_decision(
-    decision: Annotated[AuthorizationDecisionForm, Depends()],
+    decision: Annotated[AuthorizationDecisionForm, Form()],
     authorization_service: AuthorizationRequestServiceDep,
     transaction_service: AuthorizationTransactionServiceDep,
     user_ctx: CurrentBrowserFormUserContextDep,

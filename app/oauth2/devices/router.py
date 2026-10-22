@@ -5,6 +5,7 @@ from typing import Annotated
 from fastapi import (
     APIRouter,
     Depends,
+    Form,
     Request,
     Response,
 )
@@ -50,7 +51,7 @@ async def device_authorization(  # noqa: PLR0913
     response: Response,
     device_authorization_service: DeviceAuthorizationServiceDep,
     request: Request,
-    form: Annotated[DeviceAuthorizationForm, Depends()],
+    form: Annotated[DeviceAuthorizationForm, Form()],
     basic_credentials: OAuth2ClientBasicDep,
     db_session: DbSessionDep,
     password_hasher: PasswordHasherDep,

@@ -67,20 +67,3 @@ async def get_token_grant_request(
 
 
 TokenGrantRequestDep = Annotated[GrantRequest, Depends(get_token_grant_request)]
-
-
-class ClientAuthenticatedForm:
-    """Common client credentials accepted by OAuth2 form endpoints."""
-
-    def __init__(
-        self,
-        client_id: Annotated[
-            str | None, Form(max_length=OAuth2Specs.CLIENT_ID_LENGTH_MAX)
-        ] = None,
-        client_secret: Annotated[
-            str | None, Form(max_length=OAuth2Specs.PROTOCOL_VALUE_LENGTH_MAX)
-        ] = None,
-    ) -> None:
-        """Store optional form-based client credentials."""
-        self.client_id = client_id
-        self.client_secret = client_secret

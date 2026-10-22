@@ -3,7 +3,7 @@
 from typing import Annotated
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
-from fastapi import APIRouter, Depends, Query, Request, Response, status
+from fastapi import APIRouter, Form, Query, Request, Response, status
 from starlette.responses import HTMLResponse
 
 from app.browser_sessions.dependencies import (
@@ -68,7 +68,7 @@ async def device_verify_submit(
     device_authorization_service: DeviceAuthorizationServiceDep,
     user_ctx: CurrentBrowserFormUserContextDep,
     settings: SettingsDep,
-    form: Annotated[DeviceVerificationForm, Depends()],
+    form: Annotated[DeviceVerificationForm, Form()],
 ) -> HTMLResponse:
     """Apply an authenticated device authorization decision."""
     ok = await device_authorization_service.decide_device_authorization(

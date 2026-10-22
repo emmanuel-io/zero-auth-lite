@@ -406,3 +406,29 @@ async def test_authorize_rejects_inactive_client(
     )
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.asyncio
+@pytest.mark.negative
+@pytest.mark.parametrize("decision", ["", "invalid"])
+async def test_consent_rejects_malformed_decision(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    verified_user_credentials: UserCredentials,
+    decision: str,
+) -> None:
+    """Reject empty and unknown decisions through the protocol boundary."""
+    login = await login_browser_session(client, verified_user_credentials)
+    csrf_header = app.state.settings.browser_session.csrf.header_name
+
+    response = await client.post(
+        "/oauth2/authorize/decision",
+        data={"transaction_id": "unused-transaction", "decision": decision},
+        headers={
+            "Origin": str(client.base_url).rstrip("/"),
+            csrf_header: login.headers[csrf_header],
+        },
+    )
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.json() == {"error": "invalid_request"}

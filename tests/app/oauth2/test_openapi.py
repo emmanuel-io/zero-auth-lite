@@ -1386,6 +1386,12 @@ def test_device_forms_and_referenced_security_schemes_are_defined(
         "client_secret",
         "scope",
     }
+    assert (
+        _form_schema(app, "/oauth2/device_authorization")["properties"]["scope"][
+            "anyOf"
+        ][0]["maxLength"]
+        == OAuth2Specs.SCOPE_LIST_LENGTH_MAX
+    )
     assert _operation(app, "/oauth2/device_authorization", "post")["requestBody"][
         "required"
     ]
