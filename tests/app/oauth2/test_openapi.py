@@ -86,12 +86,17 @@ def _form_schema(app: FastAPI, path: str) -> dict[str, Any]:
         "application/x-www-form-urlencoded"
     ]["schema"]
     reference = form.get("$ref")
-    if reference is None:
+    if reference is not None:
+        form = schema["components"]["schemas"][reference.rsplit("/", 1)[1]]
+    if "allOf" not in form:
         return cast("dict[str, Any]", form)
-    return cast(
-        "dict[str, Any]",
-        schema["components"]["schemas"][reference.rsplit("/", 1)[1]],
-    )
+    properties = dict(form.get("properties", {}))
+    required = set(form.get("required", []))
+    for part in form["allOf"]:
+        component = schema["components"]["schemas"][part["$ref"].rsplit("/", 1)[1]]
+        properties.update(component.get("properties", {}))
+        required.update(component.get("required", []))
+    return {**form, "properties": properties, "required": sorted(required)}
 
 
 def test_openapi_exposes_membership_roles(
@@ -335,7 +340,13 @@ def test_token_protocol_openapi_uses_forms_and_basic_auth(app: FastAPI) -> None:
     assert introspection["security"] == [{"OAuth2ClientBasic": []}, {}]
     assert "422" not in introspection["responses"]
     for path in ("/oauth2/revoke", "/oauth2/introspect"):
-        hint = _form_schema(app, path)["properties"]["token_type_hint"]
+        form_schema = _form_schema(app, path)
+        assert form_schema["required"] == ["token"]
+        token = form_schema["properties"]["token"]
+        assert token["minLength"] == 1
+        assert token["maxLength"] == OAuth2Specs.PROTOCOL_VALUE_LENGTH_MAX
+        hint = form_schema["properties"]["token_type_hint"]
+        assert hint["anyOf"][0]["maxLength"] == OAuth2Specs.GRANT_TYPE_LENGTH_MAX
         assert "enum" not in hint
     assert (
         "content" not in _operation(app, "/oauth2/revoke", "post")["responses"]["200"]

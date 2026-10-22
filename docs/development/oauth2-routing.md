@@ -78,6 +78,11 @@ Revocation and introspection requests keep these fields in the form body:
 - `client_id`
 - `client_secret`
 
+`TokenManagementForm` supplies `token` and `token_type_hint` for both routes.
+Client-authentication dependencies supply the credentials from the same flat
+form body. The token model ignores sibling credential fields, while each
+dependency retains its own authentication policy.
+
 Never move any of these into query parameters.
 
 Explicitly prohibited:

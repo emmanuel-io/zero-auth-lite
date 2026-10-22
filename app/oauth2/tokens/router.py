@@ -37,10 +37,10 @@ from app.oauth2.schemas import (
     TokenIntrospectionResponse,
 )
 from app.oauth2.signing.keys import get_signing_key, get_verify_keys
-from app.oauth2.specs import OAuth2Specs
 from app.oauth2.tokens.dependencies import (
     TokenIntrospectionServiceDep,
 )
+from app.oauth2.tokens.forms import TokenManagementForm
 from app.oauth2.tokens.refresh import handle_refresh_token_grant
 from app.oauth2.tokens.revocation import TokenRevocationServiceDep
 from app.openapi_tags import OAUTH2_TOKEN_PROTOCOL_TAG
@@ -170,18 +170,13 @@ async def revoke_token(
     response: Response,
     revocation_service: TokenRevocationServiceDep,
     client_auth: Annotated[ClientAuth, Depends(authenticate_revoke_client)],
-    token: Annotated[
-        str, Form(min_length=1, max_length=OAuth2Specs.PROTOCOL_VALUE_LENGTH_MAX)
-    ],
-    token_type_hint: Annotated[
-        str | None, Form(max_length=OAuth2Specs.GRANT_TYPE_LENGTH_MAX)
-    ] = None,
+    form: Annotated[TokenManagementForm, Form()],
 ) -> Response:
     """Revoke an access or refresh token without revealing token validity."""
     revoked = await revocation_service.revoke(
-        token=token,
+        token=form.token,
         client_id=client_auth.client_id,
-        token_type_hint=token_type_hint,
+        token_type_hint=form.token_type_hint,
     )
     if revoked is not None:
         logger.info(
@@ -192,7 +187,7 @@ async def revoke_token(
             client_auth.client_id,
             str(revoked.session_public_id),
             revoked.grant_type,
-            token_type_hint,
+            form.token_type_hint,
         )
     _prevent_token_response_caching(response)
     response.status_code = status.HTTP_200_OK
@@ -211,24 +206,18 @@ async def revoke_token(
     },
 )
 # Client credentials and the token form field are separate protocol inputs.
-async def introspect_token(  # noqa: PLR0913
+async def introspect_token(
     *,
     response: Response,
     introspection_service: TokenIntrospectionServiceDep,
     oauth2_settings: OAuth2SettingsDep,
     client_auth: Annotated[ClientAuth, Depends(authenticate_introspection_client)],
-    token: Annotated[
-        str, Form(min_length=1, max_length=OAuth2Specs.PROTOCOL_VALUE_LENGTH_MAX)
-    ],
-    token_type_hint: Annotated[
-        str | None, Form(max_length=OAuth2Specs.GRANT_TYPE_LENGTH_MAX)
-    ] = None,
+    form: Annotated[TokenManagementForm, Form()],
 ) -> TokenIntrospectionResponse:
     """Inspect a token for the authenticated OAuth2 client."""
-    _ = token_type_hint
     _prevent_token_response_caching(response)
     return await introspection_service.introspect_token(
-        token=token,
+        token=form.token,
         client_id=client_auth.client_id,
         key=get_verify_keys(oauth2_settings),
     )
