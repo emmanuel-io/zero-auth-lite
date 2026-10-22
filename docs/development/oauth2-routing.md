@@ -53,27 +53,21 @@ remain explicit service decisions so errors redirect only to a trusted client.
 
 ### Token Form
 
-Token request parameters belong in
-`application/x-www-form-urlencoded` `Form` fields:
+Token request parameters belong in an `application/x-www-form-urlencoded`
+Pydantic form model. `TokenRequestForm` in `app/oauth2/grants/dependencies.py`
+declares the supported raw fields and their transport bounds:
 
 ```python
-class TokenRequestForm:
-    def __init__(
-        self,
-        grant_type: Annotated[OAuth2GrantType, Form()],
-        client_id: Annotated[str | None, Form()] = None,
-        client_secret: Annotated[str | None, Form()] = None,
-        code: Annotated[str | None, Form()] = None,
-        redirect_uri: Annotated[str | None, Form()] = None,
-        code_verifier: Annotated[str | None, Form()] = None,
-        refresh_token: Annotated[str | None, Form()] = None,
-        device_code: Annotated[str | None, Form()] = None,
-        scope: Annotated[str | None, Form()] = None,
-    ) -> None: ...
+async def get_token_grant_request(
+    form: Annotated[TokenRequestForm, Form()],
+) -> GrantRequest:
+    return parse_token_grant(form.model_dump())
 ```
 
-Grant-specific conditional rules still belong in domain parsing and services,
-not in a giant endpoint signature.
+The transport model ignores unknown fields. The explicit grant parser selects
+relevant fields, requires grant-specific values, and builds the domain request.
+Client authentication remains a separate dependency. The route boundary maps
+unsupported grant types and other transport failures to OAuth2 errors.
 
 ### Revocation And Introspection
 

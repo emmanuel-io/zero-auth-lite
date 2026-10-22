@@ -78,9 +78,11 @@ async def test_client_credentials_works_without_browser_sessions(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("extra_fields", [{}, {"extension": "ignored"}])
 async def test_client_credentials_grant_issues_machine_access_token(
     app: FastAPI,
     client: httpx.AsyncClient,
+    extra_fields: dict[str, str],
 ) -> None:
     """Assert confidential machine clients can get client-credentials tokens."""
     raw_secret = await create_confidential_machine_client(app)
@@ -93,6 +95,7 @@ async def test_client_credentials_grant_issues_machine_access_token(
         data={
             "grant_type": "client_credentials",
             "scope": "service:read",
+            **extra_fields,
         },
         headers={"Authorization": f"Basic {basic_payload}"},
     )
