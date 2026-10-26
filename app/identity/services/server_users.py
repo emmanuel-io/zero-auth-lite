@@ -190,10 +190,12 @@ class ServerUsersService:
     async def create(self, *, dto: ServerUserCreateDTO) -> UserReadDTO:
         """Invite a user into an operator-selected organization."""
         self._require_actor()
+        hashed_password = await self.lifecycle.prepare_creation_password_autonomously()
         internal_organization_id = await self._resolve_organization_id(
             public_id=dto.organization_id
         )
         row, membership = await self.lifecycle.create(
+            hashed_password=hashed_password,
             command=UserCreateCommand(
                 organization_id=internal_organization_id,
                 onboarding=UserOnboardingMode.INVITATION,

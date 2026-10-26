@@ -38,6 +38,7 @@ async def test_lifecycle_creates_invited_user_and_publishes_event(
     async with app.state.core_session_factory() as db_session:
         lifecycle = build_lifecycle(app, db_session, publisher=publisher)
         created, membership = await lifecycle.create(
+            hashed_password=await lifecycle.prepare_creation_password_autonomously(),
             command=UserCreateCommand(
                 organization_id=organization.id,
                 email="lifecycle-invite@example.com",
@@ -61,6 +62,9 @@ async def test_lifecycle_requests_verification_for_user_with_password(
     async with app.state.core_session_factory() as db_session:
         lifecycle = build_lifecycle(app, db_session, publisher=publisher)
         created, _membership = await lifecycle.create(
+            hashed_password=await lifecycle.prepare_creation_password_autonomously(
+                password="S3cretPass1!"  # noqa: S106
+            ),
             command=UserCreateCommand(
                 organization_id=organization.id,
                 email="lifecycle-password@example.com",

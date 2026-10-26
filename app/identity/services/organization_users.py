@@ -173,7 +173,11 @@ class OrganizationUsersService:
     ) -> OrganizationUserReadDTO:
         """Create or invite a user in the actor's organization."""
         self._require_actor()
+        hashed_password = await self.lifecycle.prepare_creation_password_autonomously(
+            password=dto.password
+        )
         row, membership = await self.lifecycle.create(
+            hashed_password=hashed_password,
             command=UserCreateCommand(
                 organization_id=self.actor_ctx.organization_id,
                 onboarding=(

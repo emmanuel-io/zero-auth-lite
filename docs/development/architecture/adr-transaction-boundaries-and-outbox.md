@@ -42,6 +42,15 @@ Every operation belongs to one of four explicit categories:
    client-secret rotations use this category so automatic session activity is
    discarded and Argon2 work never holds a SQLite transaction.
 
+Administrator user creation prepares its password through
+`prepare_creation_password_autonomously` after checking the actor's role.
+Preparation rolls back incidental request activity before hashing; organization
+lookups and creation writes follow it. Confidential-client registration also
+discards incidental activity before hashing its initial secret. The subsequent
+creation commands leave their inserts and outbox records in the request-owned
+transaction, so creation still rolls back as one unit if the request fails.
+These preparation boundaries cannot preserve earlier request-scoped writes.
+
 Private mutation helpers and relational services call `flush()` only. The public
 service method owns the commit decision. Logs emitted before that commit use
 `outcome=attempted`: they describe a prepared operational attempt, not a

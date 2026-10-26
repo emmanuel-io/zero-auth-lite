@@ -77,16 +77,19 @@ class UserLifecycleService:
         self.email_lifecycle = UserEmailLifecycleService(db_session)
         self.access_invariants = UserAccessInvariantService(db_session)
 
-    async def create(
-        self,
-        *,
-        command: UserCreateCommand,
-    ) -> tuple[UserDB, OrganizationMembershipDB]:
-        """Create a user and atomically reserve its normalized email."""
-        password = command.password
+    async def prepare_creation_password_autonomously(
+        self, *, password: str | None = None
+    ) -> str:
+        """Discard request activity and hash credentials before creation writes."""
+        await self.db_session.rollback()
         if password is None:
             password = secrets.token_urlsafe(UserSpecs.GENERATED_PASSWORD_BYTES)
-        hashed_password = await hash_password(self.password_hasher, password)
+        return await hash_password(self.password_hasher, password)
+
+    async def create(
+        self, *, command: UserCreateCommand, hashed_password: str
+    ) -> tuple[UserDB, OrganizationMembershipDB]:
+        """Persist a prepared user and its notification in the caller's transaction."""
         await self.email_lifecycle.require_available(
             email=str(command.email),
             current_user_id=None,

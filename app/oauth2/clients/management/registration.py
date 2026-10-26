@@ -70,6 +70,10 @@ class OAuth2ClientRegistrationService(OAuth2ClientManagementSupport):
             organization_ids=dto.user_organization_ids,
         )
         raw_secret = generate_oauth2_client_secret() if dto.is_confidential else None
+        if raw_secret is not None:
+            # This entry point discards incidental session activity before hashing.
+            # Client registration itself remains in the request-owned transaction.
+            await self.db_session.rollback()
         hashed_secret = (
             await hash_password(self.password_hasher, raw_secret)
             if raw_secret
