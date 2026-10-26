@@ -4,10 +4,11 @@ from datetime import datetime, UTC
 from typing import cast
 
 from pydantic import TypeAdapter
-from sqlalchemy import insert, select, update
+from sqlalchemy import insert, literal_column, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Load, selectinload
+from sqlalchemy.sql import ColumnElement
 
 from app.core.errors.base import AppError
 from app.core.errors.common import ObjectAlreadyExistsError
@@ -32,6 +33,13 @@ def normalize_email(email: str) -> str:
     return email.strip().lower()
 
 
+def active_email_predicate() -> ColumnElement[bool]:
+    """Match SQLite's active-address partial index with fixed SQL literals."""
+    return UserEmailDB.status.in_(
+        (literal_column("'current'"), literal_column("'pending'"))
+    )
+
+
 def active_email_loader() -> Load:
     """Load only the bounded current and pending collection for a user."""
     return cast(
@@ -52,7 +60,7 @@ async def email_is_available(
     statement = (
         select(UserEmailDB.id)
         .where(UserEmailDB.normalized_email == normalize_email(email))
-        .where(UserEmailDB.status.in_(_ACTIVE_EMAIL_STATUSES))
+        .where(active_email_predicate())
     )
     if excluding_user_id is not None:
         statement = statement.where(UserEmailDB.user_id != excluding_user_id)

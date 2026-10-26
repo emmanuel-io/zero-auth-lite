@@ -13,6 +13,12 @@ identical rules. `UserEmailDB` is the source of truth: services explicitly load
 the current and, when needed, pending address before projecting the stable HTTP
 fields `email`, `pending_email`, and `email_verified`.
 
+Normalized-address lookups use `active_email_predicate()` to match the existing
+active-address partial index. Its status values are fixed SQL literals because
+SQLite cannot match parameterized status lists to that index. Login and mail
+requests also require the current status, so pending addresses stay reserved
+without becoming login or recovery identifiers.
+
 The request dependency commits on a successful response and rolls back when an
 exception crosses the boundary. Services normally flush internal mutations.
 An operation that must end the request transaction before expensive work uses

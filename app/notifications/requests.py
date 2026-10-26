@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.user import UserDB, UserEmailDB
-from app.identity.users.emails import normalize_email
+from app.identity.users.emails import active_email_predicate, normalize_email
 from app.identity.users.enums import UserEmailStatus
 from app.identity.users.types import UserEmail
 from app.notifications.events import (
@@ -34,6 +34,7 @@ class AuthNotificationRequestService:
                 .join(UserEmailDB, UserEmailDB.user_id == UserDB.id)
                 .where(
                     UserEmailDB.normalized_email == normalize_email(str(email)),
+                    active_email_predicate(),
                     UserEmailDB.status == UserEmailStatus.CURRENT,
                 )
             )

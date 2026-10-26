@@ -4,14 +4,42 @@ from datetime import datetime, UTC
 
 import pytest
 from app.db.models.user import UserDB, UserEmailDB
-from app.identity.users.emails import create_user_email, retire_email
+from app.identity.users.emails import (
+    active_email_predicate,
+    create_user_email,
+    retire_email,
+)
 from app.identity.users.enums import UserEmailStatus
 from fastapi import FastAPI
 from sqlalchemy import insert, select
+from sqlalchemy.dialects import sqlite
 from sqlalchemy.exc import IntegrityError
 
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("current_only", [False, True])
+async def test_normalized_email_lookup_uses_active_address_index(
+    app: FastAPI, *, current_only: bool
+) -> None:
+    """Use the partial index with bound email and optional current-status values."""
+    statement = select(UserEmailDB.id).where(
+        UserEmailDB.normalized_email == "lookup@example.com",
+        active_email_predicate(),
+    )
+    if current_only:
+        statement = statement.where(UserEmailDB.status == UserEmailStatus.CURRENT)
+    compiled = statement.compile(dialect=sqlite.dialect())
+    parameters = tuple(compiled.params[key] for key in compiled.positiontup or ())
+    async with app.state.core_session_factory() as session:
+        connection = await session.connection()
+        plan = await connection.exec_driver_sql(
+            f"EXPLAIN QUERY PLAN {compiled}", parameters
+        )
+        details = " ".join(row[3] for row in plan)
+    assert "SEARCH user_email USING INDEX uq_user_email_active_normalized" in details
 
 
 async def _create_user(app: FastAPI) -> int:

@@ -25,7 +25,11 @@ from app.db.models.organization_membership import OrganizationMembershipDB
 from app.db.models.user import UserDB, UserEmailDB
 from app.identity.dtos import IdentityDTO, IdentityUserDTO
 from app.identity.mapping import to_identity
-from app.identity.users.emails import active_email_loader, normalize_email
+from app.identity.users.emails import (
+    active_email_loader,
+    active_email_predicate,
+    normalize_email,
+)
 from app.identity.users.enums import UserEmailStatus
 from app.password.async_hashing import verify_and_update_password, verify_password
 from app.password.protocols import PasswordHasherProtocol
@@ -79,6 +83,7 @@ class BrowserSessionAuthenticationService:
                     .join(UserEmailDB, UserEmailDB.user_id == UserDB.id)
                     .where(
                         UserEmailDB.normalized_email == normalize_email(email),
+                        active_email_predicate(),
                         UserEmailDB.status == UserEmailStatus.CURRENT,
                     )
                 )
