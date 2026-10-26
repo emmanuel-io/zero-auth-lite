@@ -4,9 +4,11 @@ import re
 
 import httpx
 import pytest
+from app.web.management import responses as management_responses
 from fastapi import FastAPI, status
 
 from tests.fixtures.auth import login_browser, UserCredentials
+from tests.fixtures.queries import capture_selects
 from tests.identifiers import UUID4_PATTERN
 from tests.routes.management.helpers import with_external_management_presentation
 
@@ -82,16 +84,30 @@ async def test_management_confirmation_rejects_false_value(
 
 @pytest.mark.asyncio
 @with_external_management_presentation()
+@pytest.mark.parametrize("reuse_session", [False, True])
 async def test_combined_role_user_can_open_both_management_interfaces(
+    app: FastAPI,
     client: httpx.AsyncClient,
     verified_user_credentials: UserCredentials,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    reuse_session: bool,
 ) -> None:
     """Render role-specific navigation and the pinned local htmx asset."""
     login = await login_browser(client, verified_user_credentials)
     assert login.status_code == status.HTTP_204_NO_CONTENT
 
-    organization = await client.get("/management/organization")
-    operator = await client.get("/management/operator")
+    if not reuse_session:
+        monkeypatch.setattr(
+            management_responses, "get_resolved_browser_session", lambda _request: None
+        )
+    with capture_selects(app) as organization_queries:
+        organization = await client.get("/management/organization")
+    with capture_selects(app) as operator_queries:
+        operator = await client.get("/management/operator")
+    expected_selects = 3 if reuse_session else 4
+    assert len(organization_queries) == expected_selects
+    assert len(operator_queries) == expected_selects
     asset = await client.get("/static/vendor/htmx-4.0.0-beta6.min.js")
 
     assert organization.status_code == status.HTTP_200_OK

@@ -144,6 +144,12 @@ organization or operator action. OAuth2 scopes do not grant access to these
 browser pages, and enabling or disabling a browser UI does not change API
 permissions.
 
+Read-only management pages reuse the session and CSRF state already validated
+for that request. Rendering checks that the state belongs to the same user and
+session and is still active. Form submissions and rendering without matching
+resolved state load the session explicitly. Session state is never reused
+across requests.
+
 All mutations carry session-bound CSRF proof. Deletion, revocation, credential
 rotation, and global cleanup also require visible confirmation. htmx updates
 list fragments when JavaScript is available; ordinary server-rendered forms use

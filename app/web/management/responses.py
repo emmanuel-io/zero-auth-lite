@@ -6,6 +6,7 @@ from urllib.parse import urlencode
 from fastapi import Request, Response, status
 from starlette.responses import HTMLResponse
 
+from app.browser_sessions.dependencies import get_resolved_browser_session
 from app.browser_sessions.service_dependencies import BrowserSessionLifecycleServiceDep
 from app.security.principals import BrowserUserPrincipalContext
 from app.security.roles import Role
@@ -52,9 +53,20 @@ async def render_management_page(
     **context: object,
 ) -> HTMLResponse:
     """Render a management page with session CSRF and shared role navigation."""
-    csrf_token = await lifecycle_service.get_session_csrf(
-        session_id=user_ctx.raw_session_id
-    )
+    resolved_session = get_resolved_browser_session(request)
+    if (
+        request.method in {"GET", "HEAD"}
+        and resolved_session is not None
+        and resolved_session.user_id == user_ctx.user_id
+        and resolved_session.stored_session_id
+        == lifecycle_service.stored_session_id(session_id=user_ctx.raw_session_id)
+        and resolved_session.is_active()
+    ):
+        csrf_token = resolved_session.csrf
+    else:
+        csrf_token = await lifecycle_service.get_session_csrf(
+            session_id=user_ctx.raw_session_id
+        )
     settings = get_settings_snapshot(request.app)
     notice = management_notice_text(context.pop("notice", None))
     return render_page(
