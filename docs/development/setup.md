@@ -18,6 +18,11 @@ Run the project checks through the maintained wrapper:
 ./scripts/check.sh format
 ```
 
+The GitHub Quality workflow runs on pull requests and pushes to `main`. It
+checks Ruff linting and formatting, runs mypy, and executes the test suite.
+The Documentation workflow separately checks executable snippets and builds
+the documentation with strict validation.
+
 Tests should verify observable authentication and authorization behavior rather
 than implementation details. Before changing a feature boundary, read the
 [repository structure](repository-structure.md), the relevant architecture
