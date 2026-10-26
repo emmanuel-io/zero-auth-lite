@@ -245,10 +245,13 @@ async def dispatch_pending_once(
 
 
 async def cleanup_processed_events(
-    session_factory: async_sessionmaker[AsyncSession], settings: Settings
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    *,
+    now: datetime | None = None,
 ) -> int:
-    """Delete terminal events older than the configured retention period."""
-    cutoff = datetime.now(UTC) - timedelta(
+    """Delete one bounded batch of terminal events past retention."""
+    cutoff = (now or datetime.now(UTC)) - timedelta(
         seconds=settings.notification_outbox.retention_seconds
     )
     async with session_factory() as session:
@@ -263,6 +266,26 @@ async def cleanup_processed_events(
         )
         await session.commit()
         return int(getattr(result, "rowcount", 0) or 0)
+
+
+async def drain_processed_events(
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    *,
+    stop_event: asyncio.Event,
+) -> int:
+    """Drain a fixed retention cutoff through short cleanup transactions."""
+    cutoff_time = datetime.now(UTC)
+    total_deleted = 0
+    while not stop_event.is_set():
+        deleted = await cleanup_processed_events(
+            session_factory, settings, now=cutoff_time
+        )
+        total_deleted += deleted
+        if deleted < settings.notification_outbox.cleanup_batch_size:
+            break
+        await asyncio.sleep(0)
+    return total_deleted
 
 
 async def run_outbox_dispatcher(
@@ -286,7 +309,9 @@ async def run_outbox_dispatcher(
             )
             now = asyncio.get_running_loop().time()
             if now >= cleanup_after:
-                await cleanup_processed_events(session_factory, settings)
+                await drain_processed_events(
+                    session_factory, settings, stop_event=stop_event
+                )
                 cleanup_after = (
                     now + settings.notification_outbox.cleanup_interval_seconds
                 )

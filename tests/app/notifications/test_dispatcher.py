@@ -18,6 +18,7 @@ from app.notifications.dispatcher import (
     _process_claimed,
     cleanup_processed_events,
     dispatch_pending_once,
+    drain_processed_events,
 )
 from app.notifications.events import AccountVerificationRequested
 from app.notifications.lease import _record_permanent_failure
@@ -675,7 +676,7 @@ async def test_dispatch_stops_before_claiming_more_work(app: FastAPI) -> None:
 
 @pytest.mark.asyncio
 async def test_processed_event_cleanup_is_bounded(app: FastAPI) -> None:
-    """Delete only one configured retention batch per cleanup transaction."""
+    """Drain retained events in bounded batches and honor shutdown."""
     async with app.state.core_session_factory() as session:
         publisher = NotificationOutboxPublisher(session)
         await publisher.publish(
@@ -688,6 +689,12 @@ async def test_processed_event_cleanup_is_bounded(app: FastAPI) -> None:
             AccountVerificationRequested(
                 user_public_id=PublicId(2),
                 user_email_id=2,
+            )
+        )
+        await publisher.publish(
+            AccountVerificationRequested(
+                user_public_id=PublicId(3),
+                user_email_id=3,
             )
         )
         await session.execute(
@@ -714,4 +721,24 @@ async def test_processed_event_cleanup_is_bounded(app: FastAPI) -> None:
             select(func.count()).select_from(NotificationOutboxDB)
         )
     assert deleted == 1
-    assert remaining == 1
+    expected_remaining = 2
+    assert remaining == expected_remaining
+
+    stopped = asyncio.Event()
+    stopped.set()
+    assert (
+        await drain_processed_events(
+            app.state.core_session_factory, settings, stop_event=stopped
+        )
+        == 0
+    )
+
+    deleted = await drain_processed_events(
+        app.state.core_session_factory, settings, stop_event=asyncio.Event()
+    )
+    assert deleted == expected_remaining
+    async with app.state.core_session_factory() as session:
+        assert (
+            await session.scalar(select(func.count()).select_from(NotificationOutboxDB))
+            == 0
+        )

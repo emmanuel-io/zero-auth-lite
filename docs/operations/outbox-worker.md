@@ -36,3 +36,9 @@ registered event without a notification builder is also terminal and signals a
 code or deployment mismatch.
 Configuration failures while constructing the mail service stop worker startup
 so operators can correct them.
+
+Processed events remain for `notification_outbox.retention_seconds`. At each
+cleanup interval, the worker drains events past a fixed retention cutoff in
+transactions of at most `cleanup_batch_size` rows. Each batch commits before
+the next begins, releasing SQLite's writer between batches. Shutdown is checked
+between batches; a backlog is not limited to one batch per interval.
