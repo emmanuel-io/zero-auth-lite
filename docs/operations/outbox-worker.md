@@ -48,4 +48,7 @@ or expired for at least `retention_seconds`, using the same cleanup interval
 and batch size. Tokens for an email with any pending notification are retained,
 including claimed or retrying notifications. Those records let retries recover
 the same token and prevent older queued requests from replacing newer tokens.
+Each batch selects pending email IDs once, rather than searching the pending
+queue separately for every token. Payloads without an email ID do not block
+cleanup for other addresses.
 Keep the outbox worker running to perform both retention tasks.

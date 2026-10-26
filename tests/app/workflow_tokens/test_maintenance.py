@@ -94,6 +94,29 @@ async def test_cleanup_drains_only_old_terminal_tokens(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("payload", [{}, {"user_email_id": None}])
+async def test_pending_payload_without_email_does_not_block_cleanup(
+    app: FastAPI,
+    verification_event: AccountVerificationRequested,
+    payload: dict[str, object],
+) -> None:
+    """Ignore missing email IDs without letting SQL NULL block every deletion."""
+    old = datetime.now(UTC) - timedelta(seconds=RETENTION_SECONDS + 60)
+    async with app.state.core_session_factory.begin() as session:
+        await NotificationOutboxPublisher(session).publish(verification_event)
+        await session.execute(update(NotificationOutboxDB).values(payload=payload))
+        await session.execute(
+            insert(UserWorkflowTokenDB).values(
+                user_email_id=verification_event.user_email_id,
+                purpose=WorkflowTokenPurpose.VERIFY_EMAIL,
+                token_hash="a" * 64,
+                expires_at=old,
+            )
+        )
+    assert await _cleanup(app) == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("consumed", [False, True])
 async def test_cleanup_preserves_same_event_retry_state(
     app: FastAPI,

@@ -4,7 +4,7 @@ import asyncio
 from datetime import datetime, timedelta, UTC
 from typing import cast, TYPE_CHECKING
 
-from sqlalchemy import delete, exists, select
+from sqlalchemy import delete, select
 
 from app.db.models.notification_outbox import NotificationOutboxDB
 from app.db.models.workflow_token import UserWorkflowTokenDB
@@ -28,19 +28,17 @@ async def drain_workflow_token_cleanup(
     same-event retries and the markers that suppress delayed older events.
     """
     cutoff = datetime.now(UTC) - timedelta(seconds=retention_seconds)
-    pending_delivery = exists(
-        select(NotificationOutboxDB.id).where(
-            NotificationOutboxDB.processed_at.is_(None),
-            NotificationOutboxDB.payload["user_email_id"].as_integer()
-            == UserWorkflowTokenDB.user_email_id,
-        )
+    pending_email_id = NotificationOutboxDB.payload["user_email_id"].as_integer()
+    pending_email_ids = select(pending_email_id).where(
+        NotificationOutboxDB.processed_at.is_(None),
+        pending_email_id.is_not(None),
     )
     terminal_ids = (
         select(UserWorkflowTokenDB.id)
         .where(
             (UserWorkflowTokenDB.expires_at <= cutoff)
             | (UserWorkflowTokenDB.used_at <= cutoff),
-            ~pending_delivery,
+            UserWorkflowTokenDB.user_email_id.not_in(pending_email_ids),
         )
         .order_by(UserWorkflowTokenDB.id)
         .limit(batch_size)
