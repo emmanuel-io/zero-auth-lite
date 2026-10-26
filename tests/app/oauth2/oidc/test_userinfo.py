@@ -1,5 +1,7 @@
 """Branch tests for the OIDC UserInfo service."""
 
+from dataclasses import replace
+
 import pytest
 from app.db.models.organization_membership import OrganizationMembershipDB
 from app.db.models.user import UserDB, UserEmailDB
@@ -10,6 +12,7 @@ from app.oauth2.errors import (
 )
 from app.oauth2.oidc.userinfo import OIDCUserInfoService
 from app.oauth2.settings import OAuth2Settings
+from app.oauth2.user_identity import load_eligible_oauth2_user_identity
 from app.security.principals import OAuth2UserPrincipalContext
 from fastapi import FastAPI
 from sqlalchemy import insert, select
@@ -71,6 +74,19 @@ async def test_userinfo_direct_service_security_branches(app: FastAPI) -> None:
             scopes=frozenset({"openid", "email", "profile"}),
         )
         response = await enabled.get_userinfo(principal_ctx=full)
+        identity = await load_eligible_oauth2_user_identity(
+            db_session=session, user_id=user.id, organization_id=organization_id
+        )
+        assert identity is not None
+        with pytest.raises(OAuth2TokenSessionInvalidError):
+            await enabled.get_userinfo(
+                principal_ctx=full,
+                identity=replace(identity, user=replace(identity.user, id=user.id + 1)),
+            )
+        assert (
+            await enabled.get_userinfo(principal_ctx=full, identity=identity)
+            == response
+        )
         assert response["name"] == "Ada Lovelace"
         assert response["email"] == "oidc@example.test"
         subject_only = await enabled.get_userinfo(

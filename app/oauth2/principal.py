@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models.oauth2_client import OAuth2ClientDB
 from app.db.models.oauth2_session import OAuth2SessionDB
 from app.db.models.oauth2_token_state import OAuth2TokenStateDB
+from app.identity.dtos import IdentityDTO
 from app.oauth2.clients.dtos import OAuth2ClientReadDTO
 from app.oauth2.errors import (
     OAuth2AccessTokenInvalidError,
@@ -66,6 +67,32 @@ class OAuth2BearerPrincipalService:
         key: ed25519.Ed25519PublicKey | str | tuple[OAuth2VerifyKey, ...],
     ) -> OAuth2PrincipalContext:
         """Validate a JWT access token and resolve its user or client principal."""
+        principal, _identity = await self._resolve_principal(
+            access_token=access_token, key=key
+        )
+        return principal
+
+    async def get_current_user_identity(
+        self,
+        *,
+        access_token: str,
+        key: ed25519.Ed25519PublicKey | str | tuple[OAuth2VerifyKey, ...],
+    ) -> tuple[OAuth2UserPrincipalContext, IdentityDTO]:
+        """Return the validated user principal and identity for the same token."""
+        principal, identity = await self._resolve_principal(
+            access_token=access_token, key=key
+        )
+        if not isinstance(principal, OAuth2UserPrincipalContext) or identity is None:
+            raise OAuth2AccessTokenInvalidError
+        return principal, identity
+
+    async def _resolve_principal(
+        self,
+        *,
+        access_token: str,
+        key: ed25519.Ed25519PublicKey | str | tuple[OAuth2VerifyKey, ...],
+    ) -> tuple[OAuth2PrincipalContext, IdentityDTO | None]:
+        """Validate stored authority and retain the identity used to resolve it."""
         token_payload = verify_access_token(
             token=access_token,
             issuer=self.settings.issuer,
@@ -105,7 +132,7 @@ class OAuth2BearerPrincipalService:
                 oauth2_session_id=token_state.session_id,
                 client_id=client.client_id,
                 scopes=scopes,
-            )
+            ), None
 
         identity = await load_eligible_oauth2_user_identity(
             db_session=self.db_session,
@@ -133,7 +160,7 @@ class OAuth2BearerPrincipalService:
             client_id=client.client_id,
             scopes=scopes,
             roles=frozenset(Role(role) for role in user.roles),
-        )
+        ), identity
 
     async def _read_valid_token_family(
         self,

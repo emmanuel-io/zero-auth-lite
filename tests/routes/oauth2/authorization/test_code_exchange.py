@@ -28,6 +28,7 @@ from tests.fixtures.oauth2 import (
     request_authorization_code,
     request_user_token,
 )
+from tests.fixtures.queries import capture_selects
 from tests.fixtures.settings import app_settings
 from tests.identifiers import deterministic_uuid
 
@@ -192,10 +193,12 @@ async def test_authorization_code_exchange_issues_id_token_when_oidc_enabled(
 @pytest.mark.asyncio
 @app_settings(oauth2={"oidc_enabled": True})
 @pytest.mark.negative
+@pytest.mark.parametrize("method", ["GET", "POST"])
 async def test_userinfo_requires_oidc_and_openid_scope(
     app: FastAPI,
     client: httpx.AsyncClient,
     verified_user_credentials: UserCredentials,
+    method: str,
 ) -> None:
     """Assert userinfo returns OIDC claims for an openid access token."""
     await create_public_oidc_client(app)
@@ -220,10 +223,16 @@ async def test_userinfo_requires_oidc_and_openid_scope(
     )
     assert token_response.status_code == status.HTTP_200_OK
 
-    userinfo_response = await client.get(
-        "/oauth2/userinfo",
-        headers={"Authorization": f"Bearer {token_response.json()['access_token']}"},
-    )
+    with capture_selects(app) as statements:
+        userinfo_response = await client.request(
+            method,
+            "/oauth2/userinfo",
+            headers={
+                "Authorization": f"Bearer {token_response.json()['access_token']}"
+            },
+        )
+    expected_selects = 4
+    assert len(statements) == expected_selects
 
     assert userinfo_response.status_code == status.HTTP_200_OK
     body = userinfo_response.json()

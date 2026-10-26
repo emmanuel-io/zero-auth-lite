@@ -22,6 +22,11 @@ access token. It is useful when the client needs claims after the original ID
 token was issued. The endpoint must still validate token, session, client, and
 identity state.
 
+Within each UserInfo request, bearer validation passes its resolved identity
+directly to claim selection. This avoids loading the same user and email twice;
+identity data is not cached across requests, so later requests still check
+current token, session, client, and account state.
+
 Both GET and POST require Bearer authentication and the `openid` scope.
 `openid` always permits `sub`; `profile` permits name claims; and `email`
 permits `email` and `email_verified`. Unavailable or unauthorized optional

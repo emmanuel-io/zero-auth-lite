@@ -13,6 +13,7 @@ from fastapi import (
 from fastapi.security import HTTPAuthorizationCredentials
 
 from app.http_paths import OAUTH2_USERINFO_PATH
+from app.identity.dtos import IdentityDTO
 from app.oauth2.error_codes import OAuth2ErrorCode
 from app.oauth2.errors import (
     OAuth2AccessTokenInvalidError,
@@ -44,15 +45,15 @@ from app.settings.dependencies import SettingsDep
 from app.settings.root import Settings
 
 
-async def get_userinfo_principal_context(
+async def get_userinfo_context(
     bearer_principal_service: OAuth2BearerPrincipalServiceDep,
     settings: SettingsDep,
     credentials: Annotated[
         HTTPAuthorizationCredentials | None,
         Security(bearer),
     ],
-) -> OAuth2UserPrincipalContext:
-    """Resolve the current OAuth2 principal from a bearer access token."""
+) -> tuple[OAuth2UserPrincipalContext, IdentityDTO]:
+    """Resolve one validated bearer principal and its current identity."""
     if credentials is None:
         raise OAuth2ProtocolError(
             error=OAuth2ErrorCode.INVALID_TOKEN,
@@ -60,7 +61,7 @@ async def get_userinfo_principal_context(
             headers={"WWW-Authenticate": "Bearer"},
         )
     try:
-        principal = await bearer_principal_service.get_current_oauth2_principal_context(
+        return await bearer_principal_service.get_current_user_identity(
             access_token=credentials.credentials,
             key=get_verify_keys(settings.oauth2),
         )
@@ -70,18 +71,11 @@ async def get_userinfo_principal_context(
             status_code=status.HTTP_401_UNAUTHORIZED,
             headers={"WWW-Authenticate": "Bearer"},
         ) from exc
-    if not isinstance(principal, OAuth2UserPrincipalContext):
-        raise OAuth2ProtocolError(
-            error=OAuth2ErrorCode.INVALID_TOKEN,
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    return principal
 
 
-UserInfoPrincipalContextDep = Annotated[
-    OAuth2UserPrincipalContext,
-    Depends(get_userinfo_principal_context),
+UserInfoContextDep = Annotated[
+    tuple[OAuth2UserPrincipalContext, IdentityDTO],
+    Depends(get_userinfo_context),
 ]
 
 
@@ -175,12 +169,15 @@ async def _userinfo_response(
     *,
     response: Response,
     userinfo_service: OIDCUserInfoServiceDep,
-    principal_ctx: OAuth2UserPrincipalContext,
+    userinfo_ctx: tuple[OAuth2UserPrincipalContext, IdentityDTO],
 ) -> UserInfoResponse:
     """Return UserInfo while preserving Bearer error semantics."""
     _userinfo_headers(response)
     try:
-        return await userinfo_service.get_userinfo(principal_ctx=principal_ctx)
+        principal_ctx, identity = userinfo_ctx
+        return await userinfo_service.get_userinfo(
+            principal_ctx=principal_ctx, identity=identity
+        )
     except OIDCOpenIDScopeRequiredError as exc:
         raise OAuth2ProtocolError(
             error=OAuth2ErrorCode.INSUFFICIENT_SCOPE,
@@ -204,13 +201,13 @@ async def _userinfo_response(
 async def userinfo_get(
     response: Response,
     userinfo_service: OIDCUserInfoServiceDep,
-    principal_ctx: UserInfoPrincipalContextDep,
+    userinfo_ctx: UserInfoContextDep,
 ) -> UserInfoResponse:
     """Return OIDC userinfo claims for the bearer access token."""
     return await _userinfo_response(
         response=response,
         userinfo_service=userinfo_service,
-        principal_ctx=principal_ctx,
+        userinfo_ctx=userinfo_ctx,
     )
 
 
@@ -223,11 +220,11 @@ async def userinfo_get(
 async def userinfo_post(
     response: Response,
     userinfo_service: OIDCUserInfoServiceDep,
-    principal_ctx: UserInfoPrincipalContextDep,
+    userinfo_ctx: UserInfoContextDep,
 ) -> UserInfoResponse:
     """Return OIDC userinfo claims for POST callers."""
     return await _userinfo_response(
         response=response,
         userinfo_service=userinfo_service,
-        principal_ctx=principal_ctx,
+        userinfo_ctx=userinfo_ctx,
     )

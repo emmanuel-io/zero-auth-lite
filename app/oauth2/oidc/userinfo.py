@@ -2,6 +2,7 @@
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.identity.dtos import IdentityDTO
 from app.oauth2.errors import (
     OAuth2TokenSessionInvalidError,
     OIDCOpenIDScopeRequiredError,
@@ -30,18 +31,27 @@ class OIDCUserInfoService:
         self,
         *,
         principal_ctx: OAuth2UserPrincipalContext,
+        identity: IdentityDTO | None = None,
     ) -> UserInfoResponse:
         """Return OIDC userinfo for a validated user principal."""
         if not self.settings.oidc_enabled:
             raise OAuth2TokenSessionInvalidError
         if "openid" not in principal_ctx.scopes:
             raise OIDCOpenIDScopeRequiredError
-        identity = await load_eligible_oauth2_user_identity(
-            db_session=self.db_session,
-            user_id=principal_ctx.user_id,
-            organization_id=principal_ctx.organization_id,
-        )
         if identity is None:
+            identity = await load_eligible_oauth2_user_identity(
+                db_session=self.db_session,
+                user_id=principal_ctx.user_id,
+                organization_id=principal_ctx.organization_id,
+            )
+        if (
+            identity is None
+            or identity.user.id != principal_ctx.user_id
+            or identity.user.public_id != principal_ctx.user_public_id
+            or identity.organization.id != principal_ctx.organization_id
+            or not identity.user.is_active
+            or not identity.user.email_verified
+        ):
             raise OAuth2TokenSessionInvalidError
         user = identity.user
 
