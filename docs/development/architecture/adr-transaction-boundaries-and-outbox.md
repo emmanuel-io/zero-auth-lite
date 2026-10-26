@@ -112,6 +112,11 @@ invalidates the previous active token for that purpose. Token lifetime starts
 at the first effective processing attempt, not when the HTTP request enqueues
 the event.
 
+The outbox worker removes consumed or expired tokens after the outbox retention
+period, in bounded transactions. It retains all token records for an email while
+any notification for that email remains pending. This preserves consumed-token
+markers, retry renewal, and newer-request ordering until delivery is terminal.
+
 Key rotation does not rewrite active token hashes. Retries resolve the key by
 the identifier persisted with the token and verify the reconstructed hash before
 building an email. Old secrets must remain configured until their tokens are no

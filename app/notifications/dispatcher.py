@@ -29,6 +29,7 @@ from app.notifications.lease import (
 )
 from app.notifications.specs import OutboxProcessingResult
 from app.settings.root import Settings
+from app.workflow_tokens.maintenance import drain_workflow_token_cleanup
 from app.workflow_tokens.service import WorkflowTokenService
 
 
@@ -311,6 +312,12 @@ async def run_outbox_dispatcher(
             if now >= cleanup_after:
                 await drain_processed_events(
                     session_factory, settings, stop_event=stop_event
+                )
+                await drain_workflow_token_cleanup(
+                    session_factory,
+                    retention_seconds=settings.notification_outbox.retention_seconds,
+                    batch_size=settings.notification_outbox.cleanup_batch_size,
+                    stop_event=stop_event,
                 )
                 cleanup_after = (
                     now + settings.notification_outbox.cleanup_interval_seconds

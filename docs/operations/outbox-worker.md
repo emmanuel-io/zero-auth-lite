@@ -42,3 +42,10 @@ cleanup interval, the worker drains events past a fixed retention cutoff in
 transactions of at most `cleanup_batch_size` rows. Each batch commits before
 the next begins, releasing SQLite's writer between batches. Shutdown is checked
 between batches; a backlog is not limited to one batch per interval.
+
+The same worker also cleans up workflow tokens after they have been consumed
+or expired for at least `retention_seconds`, using the same cleanup interval
+and batch size. Tokens for an email with any pending notification are retained,
+including claimed or retrying notifications. Those records let retries recover
+the same token and prevent older queued requests from replacing newer tokens.
+Keep the outbox worker running to perform both retention tasks.
